@@ -1,0 +1,8 @@
+[package]
+name    = "watax"
+version = "0.1.0"
+desc    = ""
+license = "MIT"
+bin     = "src/main.tr"
+
+[deps]

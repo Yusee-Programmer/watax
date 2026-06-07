@@ -1,0 +1,5 @@
+.taupkg
+*.exe
+*.txt
+build/
+*.c
