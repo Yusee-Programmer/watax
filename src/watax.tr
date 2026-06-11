@@ -3,16 +3,20 @@
 # Axum-shaped, Flask-simple: build an app with a fluent (method-chaining)
 # builder, bind each route to a plain handler function, and serve.
 #
-#   from watax import App, HttpConn
+#   from watax import App
+#   from std.net.http_server import HttpConn
 #
 #   def home(c: HttpConn):
 #       c.send_text(200, "Hello, watax!")
 #
 #   def main():
-#       App.new()
-#          .get("/", home)
-#          .get("/users/:id", show_user)
-#          .listen("0.0.0.0", 8080)
+#       mut app = App.new()
+#       app = app.get("/", home)
+#       app = app.get("/users/:id", show_user)
+#       app.listen("0.0.0.0", 8080)
+#
+# (Multi-line method-chaining without intermediate bindings is not yet
+# supported by the parser, so each `.method(...)` call is reassigned.)
 #
 # A handler is a `def(HttpConn) -> void` — a zero-cost function pointer. The
 # HttpConn carries the parsed request (`c.request`) and the response helpers
@@ -21,10 +25,6 @@
 from std.net.http_server import HttpServer, HttpConn, HttpRequest
 from std.string.str import Str
 from core.vec import Vec
-
-# Re-export the connection/request types so apps only import from `watax`.
-pub use HttpConn
-pub use HttpRequest
 
 # A handler bound to a method + path pattern.
 pub class Route:

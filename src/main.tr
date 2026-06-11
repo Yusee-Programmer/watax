@@ -1,3 +1,15 @@
-def main() -> int:
-    print("Hello from watax!")
-    return 0
+from watax import App
+from std.net.http_server import HttpConn
+
+def home(c: HttpConn):
+    c.send_text(200, "Hello, watax!")
+
+def show_user(c: HttpConn):
+    mut id = c.request.get_param("id")
+    c.send_text(200, "user id = " + id)
+
+def main():
+    mut app = App.new()
+    app = app.get("/", home)
+    app = app.get("/users/:id", show_user)
+    app.listen("127.0.0.1", 8080)
