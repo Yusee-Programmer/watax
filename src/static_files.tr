@@ -1,0 +1,41 @@
+# watax static file serving — directories mounted under a URL prefix.
+
+from std.net.http_server import HttpConn, HttpResponse
+from std.string.str import Str
+from std.io import File
+
+# A directory served verbatim under a URL prefix, e.g. ("/static", "./public").
+pub class StaticMount:
+    pub prefix: str
+    pub dir:    str
+
+extend StaticMount:
+    pub def init(prefix: str, dir: str) -> StaticMount:
+        mut m  = StaticMount()
+        m.prefix = prefix
+        m.dir    = dir
+        return m
+
+# Guess a Content-Type header from a file extension.
+pub def content_type_for(path: str) -> str:
+    if Str.ends_with(path, ".html") or Str.ends_with(path, ".htm"): return "text/html; charset=utf-8"
+    if Str.ends_with(path, ".css"):  return "text/css; charset=utf-8"
+    if Str.ends_with(path, ".js"):   return "application/javascript; charset=utf-8"
+    if Str.ends_with(path, ".json"): return "application/json; charset=utf-8"
+    if Str.ends_with(path, ".svg"):  return "image/svg+xml"
+    if Str.ends_with(path, ".txt"):  return "text/plain; charset=utf-8"
+    return "application/octet-stream"
+
+# Serve `req_path` from a static mount, if the corresponding file exists.
+# Returns true (and writes the response) on a hit, false on a miss so the
+# caller can fall through to route matching / 404.
+pub def serve_static(sm: StaticMount, req_path: str, conn: HttpConn) -> bool:
+    mut rel   = Str.slice(req_path, Str.len(sm.prefix), Str.len(req_path))
+    mut fpath = sm.dir + rel
+    if not File.file_exists(fpath):
+        return false
+    mut content = File.read_text(fpath)
+    mut resp = HttpResponse.init(200, content)
+    resp.set_header("Content-Type", content_type_for(fpath))
+    HttpConn.send_response(conn, resp)
+    return true

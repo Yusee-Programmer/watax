@@ -1,0 +1,15 @@
+# watax template rendering — powered by templa.
+
+from std.net.http_server import HttpConn
+from templa import Context, render_file, render_string
+
+extend HttpConn:
+    # Render a templa template file and send it as an HTML response.
+    pub def send_template(self, status: int, path: str, ctx: Context):
+        mut html = render_file(path, ctx)
+        HttpConn.send_html(self, status, html)
+
+    # Render a templa template source string and send it as an HTML response.
+    pub def send_template_string(self, status: int, src: str, ctx: Context):
+        mut html = render_string(src, ctx)
+        HttpConn.send_html(self, status, html)

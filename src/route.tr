@@ -1,0 +1,36 @@
+# watax routing — pattern matching for the App's route table.
+
+from std.net.http_server import HttpConn, HttpRequest
+from std.string.str import Str
+
+# A handler bound to a method + path pattern.
+pub class Route:
+    pub method:  str                      # "GET", "POST", ...
+    pub pattern: str                      # "/users/:id"
+    pub handler: def(HttpConn) -> void    # zero-cost function pointer
+
+extend Route:
+    pub def init(method: str, pattern: str, handler: def(HttpConn) -> void) -> Route:
+        mut r   = Route()
+        r.method  = method
+        r.pattern = pattern
+        r.handler = handler
+        return r
+
+    # Match this route's pattern against a request path, segment by segment.
+    # ':name' segments are wildcards that bind into req.params.
+    pub def matches(self, req: HttpRequest) -> bool:
+        if not Str.eq(self.method, req.method): return false
+        mut pp = Str.split_to_vec(self.pattern, "/")
+        mut rp = Str.split_to_vec(req.path, "/")
+        if pp.len != rp.len: return false
+        mut i = 0
+        while i < pp.len:
+            mut ps = pp.get(i)
+            mut rs = rp.get(i)
+            if Str.len(ps) > 0 and Str.char_at(ps, 0) == 58:   # ':' param
+                req.params.insert(Str.slice(ps, 1, Str.len(ps)), rs)
+            elif not Str.eq(ps, rs):
+                return false
+            i = i + 1
+        return true

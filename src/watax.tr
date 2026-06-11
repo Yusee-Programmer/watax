@@ -21,95 +21,16 @@
 # A handler is a `def(HttpConn) -> void` — a zero-cost function pointer. The
 # HttpConn carries the parsed request (`c.request`) and the response helpers
 # (`send_text` / `send_json` / `send_html` / `send_status` / `redirect`).
+#
+# This file is watax's public API surface: it re-exports the pieces that live
+# in their own modules (routing, static files, JSON, templates, app/server)
+# so users only need `from watax import ...`.
 
-from std.net.http_server import HttpServer, HttpConn, HttpRequest
-from std.string.str import Str
-from core.vec import Vec
+from std.encoding.json import JsonValue
+from templa import Context
 
-# A handler bound to a method + path pattern.
-pub class Route:
-    pub method:  str                      # "GET", "POST", ...
-    pub pattern: str                      # "/users/:id"
-    pub handler: def(HttpConn) -> void    # zero-cost function pointer
-
-extend Route:
-    pub def init(method: str, pattern: str, handler: def(HttpConn) -> void) -> Route:
-        mut r   = Route()
-        r.method  = method
-        r.pattern = pattern
-        r.handler = handler
-        return r
-
-    # Match this route's pattern against a request path, segment by segment.
-    # ':name' segments are wildcards that bind into req.params.
-    pub def matches(self, req: HttpRequest) -> bool:
-        if not Str.eq(self.method, req.method): return false
-        mut pp = Str.split_to_vec(self.pattern, "/")
-        mut rp = Str.split_to_vec(req.path, "/")
-        if pp.len != rp.len: return false
-        mut i = 0
-        while i < pp.len:
-            mut ps = pp.get(i)
-            mut rs = rp.get(i)
-            if Str.len(ps) > 0 and Str.char_at(ps, 0) == 58:   # ':' param
-                req.params.insert(Str.slice(ps, 1, Str.len(ps)), rs)
-            elif not Str.eq(ps, rs):
-                return false
-            i = i + 1
-        return true
-
-# The application: a route table plus a server, configured with a builder.
-pub class App:
-    pub _routes: Vec[Route]
-    pub _server: HttpServer
-
-extend App:
-    pub def new() -> App:
-        mut a    = App()
-        a._routes = Vec[Route].init(8)
-        return a
-
-    # ── Route registration (chainable: each returns the App) ──────────────────
-    pub def route(self, method: str, pattern: str, handler: def(HttpConn) -> void) -> App:
-        self._routes.push(Route.init(method, pattern, handler))
-        return self
-
-    pub def get(self, pattern: str, handler: def(HttpConn) -> void) -> App:
-        return App.route(self, "GET", pattern, handler)
-
-    pub def post(self, pattern: str, handler: def(HttpConn) -> void) -> App:
-        return App.route(self, "POST", pattern, handler)
-
-    pub def put(self, pattern: str, handler: def(HttpConn) -> void) -> App:
-        return App.route(self, "PUT", pattern, handler)
-
-    pub def patch(self, pattern: str, handler: def(HttpConn) -> void) -> App:
-        return App.route(self, "PATCH", pattern, handler)
-
-    pub def delete(self, pattern: str, handler: def(HttpConn) -> void) -> App:
-        return App.route(self, "DELETE", pattern, handler)
-
-    # ── Serving ───────────────────────────────────────────────────────────────
-    # Bind host:port and run the accept loop (blocking). Each request is matched
-    # against the route table and dispatched to its handler; unmatched -> 404.
-    pub def listen(self, host: str, port: int):
-        self._server = HttpServer.init(host, port)
-        if not self._server.start():
-            print("watax: failed to bind " + host + ":" + port.to_str())
-            return
-        print("watax listening on http://" + host + ":" + port.to_str())
-        while self._server.is_running():
-            mut conn = self._server.accept()
-            App._dispatch(self, conn)
-            conn.close()
-
-    def _dispatch(self, conn: HttpConn):
-        mut req = conn.request
-        mut i = 0
-        while i < self._routes.len:
-            mut rt = self._routes.get(i)
-            if rt.matches(req):
-                rt.handler(conn)     # call the bound handler (function pointer)
-                return
-            i = i + 1
-        conn.send_status(404)
+from route import Route
+from static_files import StaticMount, content_type_for, serve_static
+from json_ext import Json
+from template_ext import render_string
+from app import App

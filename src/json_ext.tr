@@ -1,0 +1,14 @@
+# watax JSON helpers — request body parsing and JsonValue responses.
+
+from std.net.http_server import HttpConn, HttpRequest
+from std.encoding.json import Json, JsonValue
+
+extend HttpRequest:
+    # Parse the request body as JSON.
+    pub def json(self) -> Pointer[JsonValue]:
+        return Json.parse(self.body)
+
+extend HttpConn:
+    # Serialize a JsonValue tree and send it as a JSON response.
+    pub def send_json_value(self, status: int, v: Pointer[JsonValue]):
+        HttpConn.send_json(self, status, Json.stringify(v))

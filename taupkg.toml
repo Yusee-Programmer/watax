@@ -6,3 +6,4 @@ license = "MIT"
 bin     = "src/main.tr"
 
 [deps]
+templa = "local:C:\\Users\\Yusee Habibu\\tauProject\\templa"
