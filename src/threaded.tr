@@ -36,8 +36,7 @@ extend ConnJob:
 def _handle_conn(job: ConnJob):
     mut app  = job.app.get()
     mut conn = job.conn.get()
-    App._dispatch(app, conn)
-    conn.close()
+    App._serve_conn(app, conn)
     job.app.unlock()
     job.conn.unlock()
 
@@ -76,8 +75,7 @@ def _pool_worker(w: PoolWorker):
     mut app = w.app.get()
     while app._server.is_running():
         mut conn = app._server.accept()
-        App._dispatch(app, conn)
-        conn.close()
+        App._serve_conn(app, conn)
     w.app.unlock()
 
 extend App:

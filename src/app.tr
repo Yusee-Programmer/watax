@@ -178,8 +178,25 @@ extend App:
         print("watax listening on http://" + host + ":" + port.to_str())
         while self._server.is_running():
             mut conn = self._server.accept()
+            App._serve_conn(self, conn)
+
+    # Serve one or more HTTP/1.1 keep-alive requests on a single TCP
+    # connection: dispatch the already-read request, then keep reading and
+    # dispatching further requests off the same stream until the client (or
+    # handler) asks to close, or the stream is closed by the peer.
+    pub def _serve_conn(self, conn: HttpConn):
+        while true:
             App._dispatch(self, conn)
-            conn.close()
+            if conn._closed or not conn.request.keep_alive():
+                break
+            mut prev_req = conn.request
+            mut next_req = self._server.read_next(conn._stream)
+            if Str.len(next_req.method) == 0:
+                break
+            conn.reset_for(next_req)
+            prev_req.headers.free()
+            prev_req.params.free()
+        conn.close()
 
     pub def _dispatch(self, conn: HttpConn):
         try:
