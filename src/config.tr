@@ -1,0 +1,59 @@
+# watax.config — application configuration loaded from environment variables.
+#
+# Lets a deployment override the bind address/port and a few common knobs
+# without recompiling:
+#
+#   WATAX_HOST            (default "127.0.0.1")
+#   WATAX_PORT            (default 8080)
+#   WATAX_STATIC_DIR      (default "./public")
+#   WATAX_CORS_ORIGIN     (default "*")
+#   WATAX_RATE_LIMIT      (default 0, disabled)
+#   WATAX_RATE_WINDOW_MS  (default 60000)
+
+from std.sys.env import Env
+from std.string.str import Str
+
+pub class Config:
+    pub host:           str
+    pub port:           int
+    pub static_dir:     str
+    pub cors_origin:    str
+    pub rate_limit:     int
+    pub rate_window_ms: int
+
+extend Config:
+    pub def from_env() -> Config:
+        mut env = Env.init()
+        mut c = Config()
+
+        c.host = env.get_var("WATAX_HOST")
+        if Str.len(c.host) == 0:
+            c.host = "127.0.0.1"
+
+        mut port_s = env.get_var("WATAX_PORT")
+        if Str.len(port_s) > 0:
+            c.port = Str.parse_int(port_s)
+        else:
+            c.port = 8080
+
+        c.static_dir = env.get_var("WATAX_STATIC_DIR")
+        if Str.len(c.static_dir) == 0:
+            c.static_dir = "./public"
+
+        c.cors_origin = env.get_var("WATAX_CORS_ORIGIN")
+        if Str.len(c.cors_origin) == 0:
+            c.cors_origin = "*"
+
+        mut rl_s = env.get_var("WATAX_RATE_LIMIT")
+        if Str.len(rl_s) > 0:
+            c.rate_limit = Str.parse_int(rl_s)
+        else:
+            c.rate_limit = 0
+
+        mut rw_s = env.get_var("WATAX_RATE_WINDOW_MS")
+        if Str.len(rw_s) > 0:
+            c.rate_window_ms = Str.parse_int(rw_s)
+        else:
+            c.rate_window_ms = 60000
+
+        return c

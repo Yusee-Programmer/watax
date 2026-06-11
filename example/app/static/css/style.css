@@ -1,0 +1,151 @@
+:root {
+    --bg:        #0f1115;
+    --panel:     #171a21;
+    --border:    #262b36;
+    --text:      #e6e8eb;
+    --muted:     #9aa3b2;
+    --accent:    #5b8cff;
+    --accent-2:  #34d399;
+    --danger:    #f87171;
+    --radius:    10px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+}
+
+.container {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 0 1.25rem;
+}
+
+.site-header {
+    border-bottom: 1px solid var(--border);
+    padding: 1rem 0;
+}
+
+.site-header .container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.brand {
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: var(--text);
+    text-decoration: none;
+}
+
+.site-header nav a {
+    color: var(--muted);
+    text-decoration: none;
+    margin-left: 1.25rem;
+    font-size: 0.95rem;
+}
+
+.site-header nav a:hover { color: var(--text); }
+
+main.container { padding-top: 2rem; padding-bottom: 3rem; min-height: 60vh; }
+
+.panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+}
+
+.panel h1 { margin-top: 0; }
+
+.lead { color: var(--muted); }
+
+.note-form {
+    display: flex;
+    gap: 0.5rem;
+    margin: 1.25rem 0 1.5rem;
+    flex-wrap: wrap;
+}
+
+.note-form input {
+    flex: 1 1 180px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 0.55rem 0.75rem;
+    font-size: 0.95rem;
+}
+
+.note-form button,
+.note-toggle button,
+.note-delete button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    padding: 0.55rem 1rem;
+    font-size: 0.95rem;
+    cursor: pointer;
+}
+
+.note-form button:hover { filter: brightness(1.1); }
+
+.note-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.note {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+}
+
+.note.done .note-title {
+    text-decoration: line-through;
+    color: var(--muted);
+}
+
+.note-body-text { flex: 1; min-width: 0; }
+
+.note-title { font-weight: 600; display: block; }
+
+.note-desc { color: var(--muted); font-size: 0.9rem; margin: 0.15rem 0 0; }
+
+.note-toggle button { background: var(--accent-2); }
+
+.note-delete button { background: var(--danger); }
+
+.note-toggle, .note-delete { margin: 0; }
+
+.empty { color: var(--muted); }
+
+code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.1rem 0.35rem;
+    font-size: 0.9em;
+}
+
+.site-footer {
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.85rem;
+    padding: 1.25rem 0;
+}

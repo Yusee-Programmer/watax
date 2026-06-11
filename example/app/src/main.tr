@@ -1,0 +1,182 @@
+# watax-notes — reference application for the watax web framework.
+#
+# Demonstrates:
+#   - Server-rendered HTML via templa templates with a shared layout
+#   - Static CSS/JS served from ./static
+#   - Form-based CRUD over an in-memory note list
+#   - A JSON API under /api, guarded by CORS middleware
+#   - Centralized 404 handling and request logging
+#   - Configuration from environment variables (Config.from_env)
+#
+# Run:
+#   taupkg build
+#   ./watax_notes.exe
+#   (or set WATAX_HOST / WATAX_PORT / WATAX_CORS_ORIGIN to override)
+
+from watax import App, Config, Context, request_logger_after, set_cors_origin, cors_mw, html_escape
+from std.net.http_server import HttpConn
+from std.encoding.json import JsonValue
+from std.string.str import Str
+from core.vec import Vec
+
+# ── Model ────────────────────────────────────────────────────────────────────
+
+pub class Note:
+    pub id:    int
+    pub title: str
+    pub body:  str
+    pub done:  bool
+
+extend Note:
+    pub def init(id: int, title: str, body: str) -> Note:
+        mut n = Note()
+        n.id    = id
+        n.title = title
+        n.body  = body
+        n.done  = false
+        return n
+
+    # Render this note as a single <li> fragment for the notes list template.
+    pub def to_html(self) -> str:
+        mut cls = "note"
+        if self.done: cls = "note done"
+
+        mut html = "<li class=\"" + cls + "\">"
+        html = html + "<form class=\"note-toggle\" method=\"post\" action=\"/notes/" + self.id.to_str() + "/toggle\">"
+        if self.done:
+            html = html + "<button type=\"submit\">Undo</button>"
+        else:
+            html = html + "<button type=\"submit\">Done</button>"
+        html = html + "</form>"
+
+        html = html + "<div class=\"note-body-text\">"
+        html = html + "<span class=\"note-title\">" + html_escape(self.title) + "</span>"
+        if Str.len(self.body) > 0:
+            html = html + "<p class=\"note-desc\">" + html_escape(self.body) + "</p>"
+        html = html + "</div>"
+
+        html = html + "<form class=\"note-delete\" method=\"post\" action=\"/notes/" + self.id.to_str() + "/delete\">"
+        html = html + "<button type=\"submit\">Delete</button>"
+        html = html + "</form>"
+        html = html + "</li>"
+        return html
+
+    pub def to_json(self) -> Pointer[JsonValue]:
+        mut o = JsonValue.init_object()
+        o.read().obj_set("id", JsonValue.init_int(self.id))
+        o.read().obj_set("title", JsonValue.init_str(self.title))
+        o.read().obj_set("body", JsonValue.init_str(self.body))
+        o.read().obj_set("done", JsonValue.init_bool(self.done))
+        return o
+
+# ── In-memory store ──────────────────────────────────────────────────────────
+
+mut notes:   Vec[Note] = Vec[Note].init(8)
+mut next_id: int = 1
+
+mut cfg_host: str = "127.0.0.1"
+mut cfg_port: int = 8080
+
+def seed_notes():
+    notes.push(Note.init(next_id, "Read the watax docs", "Skim README.md and example/app"))
+    next_id = next_id + 1
+    notes.push(Note.init(next_id, "Try the JSON API", "GET /api/notes returns these notes as JSON"))
+    next_id = next_id + 1
+
+def find_note(id: int) -> int:
+    mut i = 0
+    while i < notes.len:
+        if notes.get(i).id == id: return i
+        i = i + 1
+    return -1
+
+# ── Page handlers ────────────────────────────────────────────────────────────
+
+def home(c: HttpConn):
+    mut ctx   = Context.init()
+    mut items = Vec[str].init(notes.len)
+    mut i = 0
+    while i < notes.len:
+        items.push(notes.get(i).to_html())
+        i = i + 1
+    ctx.set_list("notes", items)
+    if notes.len > 0:
+        ctx.set("has_notes", "true")
+    else:
+        ctx.set("has_notes", "")
+    c.send_template(200, "templates/index.html", ctx)
+
+def about(c: HttpConn):
+    mut ctx = Context.init()
+    ctx.set("version", "0.1.0")
+    ctx.set("host", cfg_host)
+    ctx.set("port", cfg_port.to_str())
+    c.send_template(200, "templates/about.html", ctx)
+
+# Centralized error handler — used for 404s (and as a fallback for 5xx).
+def on_error(c: HttpConn, status: int):
+    if status == 404:
+        c.send_template(404, "templates/404.html", Context.init())
+    else:
+        c.send_text(status, "Internal Server Error")
+
+# ── Form handlers (CRUD) ─────────────────────────────────────────────────────
+
+def create_note(c: HttpConn):
+    mut title = Str.trim(c.request.form_param("title"))
+    mut body  = Str.trim(c.request.form_param("body"))
+    if Str.len(title) > 0:
+        notes.push(Note.init(next_id, title, body))
+        next_id = next_id + 1
+    c.redirect("/", false)
+
+def toggle_note(c: HttpConn):
+    mut idx = find_note(Str.parse_int(c.request.get_param("id")))
+    if idx >= 0:
+        mut n  = notes.get(idx)
+        n.done = not n.done
+        notes.set(idx, n)
+    c.redirect("/", false)
+
+def delete_note(c: HttpConn):
+    mut idx = find_note(Str.parse_int(c.request.get_param("id")))
+    if idx >= 0: notes.remove(idx)
+    c.redirect("/", false)
+
+# ── JSON API ─────────────────────────────────────────────────────────────────
+
+def api_list_notes(c: HttpConn):
+    mut arr = JsonValue.init_array()
+    mut i = 0
+    while i < notes.len:
+        arr.read().push(notes.get(i).to_json())
+        i = i + 1
+    c.send_json_value(200, arr)
+
+# ── Wiring ───────────────────────────────────────────────────────────────────
+
+def main():
+    seed_notes()
+
+    mut cfg = Config.from_env()
+    cfg_host = cfg.host
+    cfg_port = cfg.port
+    set_cors_origin(cfg.cors_origin)
+
+    mut app = App.new()
+    app = app.use_after(request_logger_after)
+    app = app.static_dir("/static", "./static")
+
+    app = app.get("/", home)
+    app = app.get("/about", about)
+    app = app.post("/notes", create_note)
+    app = app.post("/notes/:id/toggle", toggle_note)
+    app = app.post("/notes/:id/delete", delete_note)
+
+    mut api = app.group("/api")
+    api = api.use(cors_mw)
+    api = api.get("/notes", api_list_notes)
+    app = app.mount(api)
+
+    app = app.on_error(on_error)
+    app.listen(cfg.host, cfg.port)

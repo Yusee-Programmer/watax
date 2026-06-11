@@ -1,0 +1,147 @@
+# watax built-in middleware — logging, CORS, rate limiting, and signed
+# cookie sessions.
+#
+# All middleware here are plain `def(HttpConn) -> bool` functions, so they
+# plug straight into `app.use(...)`, `router.use(...)` or `route.with_mw(...)`.
+#
+# Note: Tauraro does not support closures/nested function declarations
+# outside of `main()`, so configurable middleware (CORS origin, rate limits)
+# is configured via small setter functions that update module-level state,
+# rather than via factory functions returning closures.
+
+from std.net.http_server import HttpConn
+from std.string.str import Str
+from std.sys.time import Clock
+from std.async.mutex import Mutex
+from std.core.map import Map
+from std.crypto.hmac import Hmac
+
+# ── Request logging ────────────────────────────────────────────────────────
+#
+# Pair with `app.use_after(request_logger_after)`: prints a structured log
+# line once the response has been sent, including status and duration. The
+# request's arrival time is stamped into `req.recv_ms` by the HTTP server
+# itself, so no separate "before" hook or shared state is needed.
+#
+#   app = app.use_after(request_logger_after)
+
+pub def request_logger_after(c: HttpConn):
+    mut dur = Clock.now_ms() - c.request.recv_ms
+    print(c.request.method + " " + c.request.path + " -> " + c.last_status.to_str() + " (" + dur.to_str() + "ms)")
+
+# ── CORS ────────────────────────────────────────────────────────────────────
+#
+# Adds CORS headers and short-circuits CORS preflight (OPTIONS) requests
+# with a 204. The allowed origin defaults to "*" (any origin); call
+# `set_cors_origin(...)` once at startup to restrict it.
+#
+#   set_cors_origin("https://example.com")
+#   app = app.use(cors_mw)
+
+mut _cors_origin: str = "*"
+
+pub def set_cors_origin(origin: str):
+    _cors_origin = origin
+
+pub def cors_mw(c: HttpConn) -> bool:
+    c.set_resp_header("Access-Control-Allow-Origin", _cors_origin)
+    c.set_resp_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+    c.set_resp_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    if Str.eq(c.request.method, "OPTIONS"):
+        c.send_status(204)
+        return false
+    return true
+
+# ── Rate limiting ───────────────────────────────────────────────────────────
+#
+# Simple fixed-window counter keyed by the remote peer address
+# (`conn.peer_addr()`). Allows up to `limit` requests per `window_ms`
+# milliseconds per key; over the limit, responds 429 and stops the chain.
+#
+#   set_rate_limit(60, 60000)   # 60 req/min per peer
+#   app = app.use(rate_limit_mw)
+
+class _RateState:
+    pub count:        int
+    pub window_start: int
+
+mut _rl_limit:     int = 0
+mut _rl_window_ms: int = 0
+mut _rl_state: Mutex[Map[str, _RateState]] = Mutex[Map[str, _RateState]].init(Map[str, _RateState].init(64))
+
+# Enable the built-in rate limiter: `limit` requests per `window_ms`
+# milliseconds, per remote peer address. Call once at startup before
+# registering `rate_limit_mw`.
+pub def set_rate_limit(limit: int, window_ms: int):
+    _rl_limit     = limit
+    _rl_window_ms = window_ms
+
+# Returns true if `key` is still within its quota for the current window
+# (and increments its counter); false if it has been exceeded.
+pub def _rate_allow(key: str) -> bool:
+    mut now   = Clock.now_ms()
+    mut table = _rl_state.get()
+    mut ok    = true
+    if table.contains(key):
+        mut st = table.get(key)
+        if now - st.window_start >= _rl_window_ms:
+            st.window_start = now
+            st.count        = 1
+        else:
+            st.count = st.count + 1
+            if st.count > _rl_limit: ok = false
+        table.insert(key, st)
+    else:
+        mut st = _RateState()
+        st.count        = 1
+        st.window_start = now
+        table.insert(key, st)
+    _rl_state.unlock()
+    return ok
+
+# Middleware: rate-limit by remote peer address (`conn.peer_addr()`).
+# Sends 429 Too Many Requests and stops the chain when exceeded. A no-op
+# until `set_rate_limit(...)` has been called (limit of 0 means unlimited).
+pub def rate_limit_mw(c: HttpConn) -> bool:
+    if _rl_limit <= 0: return true
+    if _rate_allow(c.peer_addr()):
+        return true
+    c.send_text(429, "Too Many Requests")
+    return false
+
+# ── Signed cookie sessions ─────────────────────────────────────────────────
+#
+# A minimal, dependency-free session mechanism: the session payload (an
+# arbitrary string, e.g. a user id or small JSON blob) is stored directly in
+# a cookie, suffixed with an HMAC-SHA256 signature so the client cannot forge
+# or tamper with it. Not encrypted — don't put secrets in the payload.
+#
+#   mut sessions = SessionCodec.init("change-me-32-byte-secret")
+#   c.set_cookie("session", sessions.encode("user:42"), "/", true)
+#   ...
+#   mut uid = sessions.decode(c.request.cookie("session"))   # "" if invalid/tampered
+
+pub class SessionCodec:
+    pub secret: str
+
+extend SessionCodec:
+    pub def init(secret: str) -> SessionCodec:
+        mut s = SessionCodec()
+        s.secret = secret
+        return s
+
+    # Sign `value`, producing "value.signature" for use as a cookie value.
+    pub def encode(self, value: str) -> str:
+        return value + "." + Hmac.sha256_str(self.secret, value)
+
+    # Verify a cookie value produced by encode(); returns the original value,
+    # or "" if missing, malformed, or the signature doesn't match.
+    pub def decode(self, signed: str) -> str:
+        if Str.len(signed) == 0: return ""
+        mut dot = Str.last_index_of(signed, ".")
+        if dot < 0: return ""
+        mut value = Str.slice(signed, 0, dot)
+        mut sig   = Str.slice(signed, dot + 1, Str.len(signed))
+        if Str.eq(Hmac.sha256_str(self.secret, value), sig):
+            return value
+        return ""

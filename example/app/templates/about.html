@@ -1,0 +1,25 @@
+{% extends "layout.html" %}
+
+{% block title %}About - watax notes{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>About this app</h1>
+    <p>
+        This page is part of <strong>watax-notes</strong>, the reference example
+        application for the watax web framework. It demonstrates a small but
+        complete setup:
+    </p>
+    <ul>
+        <li>Server-rendered HTML pages via templa templates with a shared layout</li>
+        <li>Static CSS and JavaScript served from <code>/static</code></li>
+        <li>Form handling for creating, completing and deleting notes</li>
+        <li>A JSON API under <code>/api/notes</code> guarded by CORS middleware</li>
+        <li>Request logging and configuration via environment variables</li>
+    </ul>
+    <p>
+        Build version: <strong>{{ version }}</strong> -
+        running on <strong>{{ host }}:{{ port }}</strong>.
+    </p>
+</section>
+{% endblock %}

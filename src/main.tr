@@ -25,4 +25,4 @@ def main():
     app = app.get("/", home)
     app = app.get("/users/:id", show_user)
     app = app.post("/echo", echo_json)
-    app.listen("127.0.0.1", 8080)
+    app.listen_threaded("127.0.0.1", 8080)

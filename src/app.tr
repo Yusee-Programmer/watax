@@ -1,4 +1,5 @@
-# watax application — route table, middleware chain, static mounts and server.
+# watax application — route table, middleware chain, route groups, static
+# mounts, error handling and the server itself.
 
 from std.net.http_server import HttpServer, HttpConn, HttpRequest, HttpResponse
 from std.string.str import Str
@@ -6,31 +7,75 @@ from core.vec import Vec
 from route import Route
 from static_files import StaticMount, serve_static
 
-# A middleware function pointer, wrapped so it can live in a Vec (Tauraro's
-# generic-instantiation syntax `Vec[def(...) -> ...]` isn't valid in value
-# position, only in type position).
-pub class Middleware:
-    pub f: def(HttpConn) -> bool
+# A group of routes sharing a path prefix and a set of middleware that only
+# runs for requests under that prefix. Build with `App.group(prefix)`, then
+# mount it onto the app with `App.mount(router)`.
+#
+#   mut api = App.group("/api/v1")
+#   api = api.use(require_json)
+#   api = api.get("/users", list_users)
+#   app  = app.mount(api)
+pub class Router:
+    pub prefix:     str
+    pub middleware: Vec[def(HttpConn) -> bool]
+    pub routes:     Vec[Route]
 
-extend Middleware:
-    pub def init(f: def(HttpConn) -> bool) -> Middleware:
-        mut m = Middleware()
-        m.f = f
-        return m
+extend Router:
+    pub def init(prefix: str) -> Router:
+        mut r = Router()
+        r.prefix     = prefix
+        r.middleware = Vec[def(HttpConn) -> bool].init(2)
+        r.routes     = Vec[Route].init(8)
+        return r
+
+    # Register a middleware that runs (after the app's global middleware) for
+    # every request under this group's prefix.
+    pub def use(self, mw: def(HttpConn) -> bool) -> Router:
+        self.middleware.push(mw)
+        return self
+
+    pub def route(self, method: str, pattern: str, handler: def(HttpConn) -> void) -> Router:
+        self.routes.push(Route.init(method, self.prefix + pattern, handler))
+        return self
+
+    pub def get(self, pattern: str, handler: def(HttpConn) -> void) -> Router:
+        return Router.route(self, "GET", pattern, handler)
+
+    pub def post(self, pattern: str, handler: def(HttpConn) -> void) -> Router:
+        return Router.route(self, "POST", pattern, handler)
+
+    pub def put(self, pattern: str, handler: def(HttpConn) -> void) -> Router:
+        return Router.route(self, "PUT", pattern, handler)
+
+    pub def patch(self, pattern: str, handler: def(HttpConn) -> void) -> Router:
+        return Router.route(self, "PATCH", pattern, handler)
+
+    pub def delete(self, pattern: str, handler: def(HttpConn) -> void) -> Router:
+        return Router.route(self, "DELETE", pattern, handler)
+
+    # Return the most recently registered route, so per-route middleware can
+    # be attached: `api.get("/admin", h); api.last_route().with_mw(auth)`.
+    pub def last_route(self) -> Route:
+        return self.routes.get(self.routes.len - 1)
 
 # The application: a route table plus a server, configured with a builder.
 pub class App:
     pub _routes:     Vec[Route]
-    pub _middleware: Vec[Middleware]
+    pub _middleware: Vec[def(HttpConn) -> bool]
+    pub _after:      Vec[def(HttpConn) -> void]
     pub _statics:    Vec[StaticMount]
     pub _server:     HttpServer
+    pub _on_error:   def(HttpConn, int) -> void
+    pub _has_error_handler: bool
 
 extend App:
     pub def new() -> App:
         mut a    = App()
         a._routes     = Vec[Route].init(8)
-        a._middleware = Vec[Middleware].init(4)
+        a._middleware = Vec[def(HttpConn) -> bool].init(4)
+        a._after      = Vec[def(HttpConn) -> void].init(2)
         a._statics    = Vec[StaticMount].init(2)
+        a._has_error_handler = false
         return a
 
     # ── Route registration (chainable: each returns the App) ──────────────────
@@ -43,7 +88,16 @@ extend App:
     # rate limiting); routing stops there. Returning `true` continues
     # to the next middleware / route handler.
     pub def use(self, mw: def(HttpConn) -> bool) -> App:
-        self._middleware.push(Middleware.init(mw))
+        self._middleware.push(mw)
+        return self
+
+    # Register a hook run after every request has been handled (whether by a
+    # route, a static file, or a 404/500), regardless of whether an earlier
+    # `use()` middleware short-circuited. Useful for logging `conn.last_status`
+    # and request duration. Hooks run in registration order and cannot stop
+    # the response (it has already been sent).
+    pub def use_after(self, hook: def(HttpConn) -> void) -> App:
+        self._after.push(hook)
         return self
 
     # Serve files under `dir` for any request path starting with `prefix`.
@@ -66,6 +120,53 @@ extend App:
     pub def delete(self, pattern: str, handler: def(HttpConn) -> void) -> App:
         return App.route(self, "DELETE", pattern, handler)
 
+    # Return the most recently registered route, so per-route middleware can
+    # be attached: `app.get("/admin", h); app.last_route().with_mw(auth)`.
+    pub def last_route(self) -> Route:
+        return self._routes.get(self._routes.len - 1)
+
+    # ── Route groups ────────────────────────────────────────────────────────
+    # Start a new route group sharing `prefix`. Build it up with .get/.post/
+    # etc and group-local .use(), then attach it with App.mount().
+    pub def group(self, prefix: str) -> Router:
+        return Router.init(prefix)
+
+    # Merge a Router's routes into the app. Each route's middleware is
+    # extended with the group's middleware (group middleware runs first,
+    # then any route-specific middleware added via .with_mw()).
+    pub def mount(self, router: Router) -> App:
+        mut i = 0
+        while i < router.routes.len:
+            mut rt = router.routes.get(i)
+            mut combined = Vec[def(HttpConn) -> bool].init(router.middleware.len + rt.middleware.len)
+            mut gi = 0
+            while gi < router.middleware.len:
+                combined.push(router.middleware.get(gi))
+                gi = gi + 1
+            mut ri = 0
+            while ri < rt.middleware.len:
+                combined.push(rt.middleware.get(ri))
+                ri = ri + 1
+            rt.middleware = combined
+            self._routes.push(rt)
+            i = i + 1
+        return self
+
+    # ── Error handling ──────────────────────────────────────────────────────
+    # Register a centralized handler for 404 (no route matched) and 500
+    # (a route or middleware handler raised). Called as handler(conn, status);
+    # it is responsible for sending a response.
+    pub def on_error(self, handler: def(HttpConn, int) -> void) -> App:
+        self._on_error  = handler
+        self._has_error_handler = true
+        return self
+
+    def _send_error(self, conn: HttpConn, status: int):
+        if self._has_error_handler:
+            self._on_error(conn, status)
+        else:
+            conn.send_status(status)
+
     # ── Serving ───────────────────────────────────────────────────────────────
     # Bind host:port and run the accept loop (blocking). Each request is matched
     # against the route table and dispatched to its handler; unmatched -> 404.
@@ -80,13 +181,23 @@ extend App:
             App._dispatch(self, conn)
             conn.close()
 
-    def _dispatch(self, conn: HttpConn):
-        # Run middleware first; any of them can short-circuit by returning false
-        # after sending its own response.
+    pub def _dispatch(self, conn: HttpConn):
+        try:
+            App._dispatch_inner(self, conn)
+        except e:
+            print("watax: handler panic: " + e)
+            App._send_error(self, conn, 500)
+        mut ai = 0
+        while ai < self._after.len:
+            self._after.get(ai)(conn)
+            ai = ai + 1
+
+    def _dispatch_inner(self, conn: HttpConn):
+        # Run global middleware first; any of them can short-circuit by
+        # returning false after sending its own response.
         mut mi = 0
         while mi < self._middleware.len:
-            mut mw = self._middleware.get(mi)
-            if not mw.f(conn):
+            if not self._middleware.get(mi)(conn):
                 return
             mi = mi + 1
 
@@ -101,12 +212,17 @@ extend App:
                     return
             si = si + 1
 
-        # Route table.
+        # Route table (incl. group + per-route middleware).
         mut i = 0
         while i < self._routes.len:
             mut rt = self._routes.get(i)
             if rt.matches(req):
+                mut ri = 0
+                while ri < rt.middleware.len:
+                    if not rt.middleware.get(ri)(conn):
+                        return
+                    ri = ri + 1
                 rt.handler(conn)     # call the bound handler (function pointer)
                 return
             i = i + 1
-        conn.send_status(404)
+        App._send_error(self, conn, 404)

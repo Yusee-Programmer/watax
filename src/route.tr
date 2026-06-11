@@ -2,35 +2,58 @@
 
 from std.net.http_server import HttpConn, HttpRequest
 from std.string.str import Str
+from core.vec import Vec
 
-# A handler bound to a method + path pattern.
+# A handler bound to a method + path pattern, plus any per-route middleware
+# (run after the app's global middleware, only for requests matching this
+# route).
 pub class Route:
-    pub method:  str                      # "GET", "POST", ...
-    pub pattern: str                      # "/users/:id"
-    pub handler: def(HttpConn) -> void    # zero-cost function pointer
+    pub method:     str                      # "GET", "POST", ...
+    pub pattern:    str                      # "/users/:id" or "/files/*path"
+    pub handler:    def(HttpConn) -> void    # zero-cost function pointer
+    pub middleware: Vec[def(HttpConn) -> bool]
 
 extend Route:
     pub def init(method: str, pattern: str, handler: def(HttpConn) -> void) -> Route:
         mut r   = Route()
-        r.method  = method
-        r.pattern = pattern
-        r.handler = handler
+        r.method     = method
+        r.pattern    = pattern
+        r.handler    = handler
+        r.middleware = Vec[def(HttpConn) -> bool].init(2)
         return r
 
+    # Append a per-route middleware (chainable). Runs only for requests that
+    # match this route, after the app's global `use()` middleware.
+    pub def with_mw(self, mw: def(HttpConn) -> bool) -> Route:
+        self.middleware.push(mw)
+        return self
+
     # Match this route's pattern against a request path, segment by segment.
-    # ':name' segments are wildcards that bind into req.params.
+    # ':name' segments bind a single path component into req.params.
+    # '*name' (only valid as the LAST segment) binds the remaining path
+    # (joined with '/') as a catch-all, e.g. "/files/*path" matches
+    # "/files/a/b/c.txt" with params["path"] == "a/b/c.txt".
     pub def matches(self, req: HttpRequest) -> bool:
         if not Str.eq(self.method, req.method): return false
         mut pp = Str.split_to_vec(self.pattern, "/")
         mut rp = Str.split_to_vec(req.path, "/")
-        if pp.len != rp.len: return false
         mut i = 0
         while i < pp.len:
             mut ps = pp.get(i)
+            if Str.len(ps) > 0 and Str.char_at(ps, 0) == 42:   # '*' catch-all
+                mut name = Str.slice(ps, 1, Str.len(ps))
+                mut rest = Vec[str].init(rp.len - i)
+                mut j = i
+                while j < rp.len:
+                    rest.push(rp.get(j))
+                    j = j + 1
+                req.params.insert(name, Str.join(rest, "/"))
+                return true
+            if i >= rp.len: return false
             mut rs = rp.get(i)
             if Str.len(ps) > 0 and Str.char_at(ps, 0) == 58:   # ':' param
                 req.params.insert(Str.slice(ps, 1, Str.len(ps)), rs)
             elif not Str.eq(ps, rs):
                 return false
             i = i + 1
-        return true
+        return i == rp.len

@@ -1,0 +1,36 @@
+# watax HTTP ergonomics — cookie lookup, abort/redirect shorthands, peer
+# address. Query-string and form-body parsing (`req.query_param` /
+# `req.form_param`) and `conn.redirect()` / `conn.set_cookie()` already live
+# in std.net.http_server; this module rounds out the request/response API.
+
+from std.net.http_server import HttpConn, HttpRequest
+from std.string.str import Str
+
+extend HttpRequest:
+    # Look up a single cookie by name from the "Cookie: a=1; b=2" header.
+    # Returns "" when the cookie is absent.
+    pub def cookie(self, name: str) -> str:
+        mut raw = self.cookies()
+        if Str.len(raw) == 0: return ""
+        mut parts = Str.split_to_vec(raw, ";")
+        mut i = 0
+        while i < parts.len:
+            mut kv  = Str.trim(parts.get(i))
+            mut eq  = Str.index_of(kv, "=")
+            if eq >= 0:
+                mut k = Str.slice(kv, 0, eq)
+                if Str.eq(k, name):
+                    return Str.slice(kv, eq + 1, Str.len(kv))
+            i = i + 1
+        return ""
+
+extend HttpConn:
+    # Send `status` with a plain-text body in one call, e.g.
+    # `conn.abort(403, "forbidden")`. Equivalent to send_text but named for
+    # the common "stop here with an error" use case.
+    pub def abort(self, status: int, msg: str):
+        HttpConn.send_text(self, status, msg)
+
+    # The remote peer's "ip:port" string, useful for logging/rate limiting.
+    pub def peer_addr(self) -> str:
+        return self._stream.peer_addr()

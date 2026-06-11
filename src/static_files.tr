@@ -1,20 +1,44 @@
-# watax static file serving — directories mounted under a URL prefix.
+# watax static file serving — directories mounted under a URL prefix, with
+# directory-index resolution, ETag/Cache-Control caching headers, and an
+# optional custom not-found fallback (e.g. for SPA routing).
 
-from std.net.http_server import HttpConn, HttpResponse
+from std.net.http_server import HttpConn, HttpRequest, HttpResponse
 from std.string.str import Str
 from std.io import File
+from std.crypto.hash import Hash
 
 # A directory served verbatim under a URL prefix, e.g. ("/static", "./public").
+# `index_file` is served for requests ending in "/" (default "index.html").
+# `not_found_file`, if set, is served (with status 200, useful for SPA
+# client-side routing) when no file matches under this mount.
+# `max_age` controls the Cache-Control header in seconds (default 3600).
 pub class StaticMount:
-    pub prefix: str
-    pub dir:    str
+    pub prefix:         str
+    pub dir:            str
+    pub index_file:     str
+    pub not_found_file: str
+    pub max_age:        int
 
 extend StaticMount:
     pub def init(prefix: str, dir: str) -> StaticMount:
         mut m  = StaticMount()
-        m.prefix = prefix
-        m.dir    = dir
+        m.prefix         = prefix
+        m.dir            = dir
+        m.index_file     = "index.html"
+        m.not_found_file = ""
+        m.max_age        = 3600
         return m
+
+    # Serve `not_found_file` (relative to `dir`) instead of falling through
+    # to the app's 404 / route table — typically "index.html" for SPAs.
+    pub def with_not_found(self, file: str) -> StaticMount:
+        self.not_found_file = file
+        return self
+
+    # Override the cache lifetime (seconds) sent in Cache-Control: max-age.
+    pub def with_max_age(self, seconds: int) -> StaticMount:
+        self.max_age = seconds
+        return self
 
 # Guess a Content-Type header from a file extension.
 pub def content_type_for(path: str) -> str:
@@ -23,19 +47,45 @@ pub def content_type_for(path: str) -> str:
     if Str.ends_with(path, ".js"):   return "application/javascript; charset=utf-8"
     if Str.ends_with(path, ".json"): return "application/json; charset=utf-8"
     if Str.ends_with(path, ".svg"):  return "image/svg+xml"
+    if Str.ends_with(path, ".png"):  return "image/png"
+    if Str.ends_with(path, ".jpg") or Str.ends_with(path, ".jpeg"): return "image/jpeg"
+    if Str.ends_with(path, ".ico"):  return "image/x-icon"
     if Str.ends_with(path, ".txt"):  return "text/plain; charset=utf-8"
     return "application/octet-stream"
 
-# Serve `req_path` from a static mount, if the corresponding file exists.
-# Returns true (and writes the response) on a hit, false on a miss so the
-# caller can fall through to route matching / 404.
-pub def serve_static(sm: StaticMount, req_path: str, conn: HttpConn) -> bool:
-    mut rel   = Str.slice(req_path, Str.len(sm.prefix), Str.len(req_path))
-    mut fpath = sm.dir + rel
-    if not File.file_exists(fpath):
-        return false
+# Send `fpath`'s contents with Content-Type, ETag and Cache-Control headers.
+# Honors If-None-Match by replying 304 with no body when the client's cached
+# ETag still matches.
+def _send_file(sm: StaticMount, fpath: str, req: HttpRequest, conn: HttpConn):
     mut content = File.read_text(fpath)
+    mut etag    = "\"" + Hash.sha256(content) + "\""
+    if Str.eq(req.header("If-None-Match"), etag):
+        mut not_mod = HttpResponse.init(304, "")
+        not_mod.set_header("ETag", etag)
+        HttpConn.send_response(conn, not_mod)
+        return
     mut resp = HttpResponse.init(200, content)
     resp.set_header("Content-Type", content_type_for(fpath))
+    resp.set_header("ETag", etag)
+    resp.set_header("Cache-Control", "public, max-age=" + sm.max_age.to_str())
     HttpConn.send_response(conn, resp)
-    return true
+
+# Serve `req_path` from a static mount, if the corresponding file exists.
+# Returns true (and writes the response) on a hit, false on a miss so the
+# caller can fall through to route matching / 404 — unless `not_found_file`
+# is set, in which case a miss serves that file instead of returning false.
+pub def serve_static(sm: StaticMount, req_path: str, conn: HttpConn) -> bool:
+    mut req   = conn.request
+    mut rel   = Str.slice(req_path, Str.len(sm.prefix), Str.len(req_path))
+    mut fpath = sm.dir + rel
+    if Str.ends_with(fpath, "/") or Str.len(rel) == 0:
+        fpath = fpath + sm.index_file
+    if File.file_exists(fpath):
+        _send_file(sm, fpath, req, conn)
+        return true
+    if Str.len(sm.not_found_file) > 0:
+        mut fallback = sm.dir + "/" + sm.not_found_file
+        if File.file_exists(fallback):
+            _send_file(sm, fallback, req, conn)
+            return true
+    return false
