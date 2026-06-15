@@ -75,7 +75,7 @@ mut notes:   Vec[Note] = Vec[Note].init(8)
 mut next_id: int = 1
 
 mut cfg_host: str = "127.0.0.1"
-mut cfg_port: int = 8080
+mut cfg_port: int = 8000
 
 def seed_notes():
     notes.push(Note.init(next_id, "Read the watax docs", "Skim README.md and example/app"))

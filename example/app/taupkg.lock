@@ -6,3 +6,9 @@ version  = "0.1.0"
 source   = "local:C:\\Users\\Yusee Habibu\\tauProject\\templa"
 checksum = "sha256:95546c385a8bdca4d1ad1e8a718d45b2c331ab8d000448d7447eb8b396c25c02"
 
+[[pkg]]
+name     = "watax"
+version  = "0.1.0"
+source   = "local:C:\\Users\\Yusee Habibu\\tauProject\\watax"
+checksum = "sha256:9faa8c809f6a1188a8f732a5528e876d8bd3bbb9697dbbbfa9f842df39d2c216"
+
