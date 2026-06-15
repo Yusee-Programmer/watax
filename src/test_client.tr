@@ -1,0 +1,72 @@
+# watax test client — run an App on a loopback port in a background thread
+# and issue real HTTP requests against it, for route/handler tests without
+# a separate server process.
+#
+#   from watax import App, TestClient
+#
+#   mut app = App.new()
+#   app = app.get("/", home)
+#   mut tc = TestClient.start(app, 18080)
+#   mut resp = tc.get("/")
+#   assert resp.status == 200
+#   assert Str.eq(resp.body, "Hello, watax!")
+#
+# The app runs for the lifetime of the test process (single-worker reactor on
+# a detached thread) - start one TestClient per port per test binary.
+
+from std.net.http import HttpClient, HttpClientResponse
+from std.async.thread import Thread
+from std.async.mutex import Mutex
+from std.async.send import Sendable
+from app import App
+
+class _TestAppHolder implements Sendable:
+    pub app:  Mutex[App]
+    pub port: int
+
+extend _TestAppHolder:
+    pub def init(app: App, port: int) -> _TestAppHolder:
+        mut h = _TestAppHolder()
+        h.app  = Mutex[App].init(app)
+        h.port = port
+        return h
+
+def _run_test_app(h: _TestAppHolder):
+    mut app = h.app.get()
+    app.listen_reactor("127.0.0.1", h.port)
+
+pub class TestClient:
+    pub port: int
+
+extend TestClient:
+    # Start `app` listening on 127.0.0.1:`port` in a detached background
+    # thread and return a client for issuing requests against it. Blocks
+    # briefly so the listener is bound before the first request is sent.
+    pub def start(app: App, port: int) -> TestClient:
+        mut t = Thread.spawn(_run_test_app, _TestAppHolder.init(app, port))
+        t.detach()
+        Thread.sleep(50)
+        mut tc = TestClient()
+        tc.port = port
+        return tc
+
+    def _client(self) -> HttpClient:
+        return HttpClient.init("127.0.0.1", self.port)
+
+    pub def get(self, path: str) -> HttpClientResponse:
+        return TestClient._client(self).get(path)
+
+    pub def post(self, path: str, body: str) -> HttpClientResponse:
+        return TestClient._client(self).post(path, body)
+
+    pub def post_json(self, path: str, body: str) -> HttpClientResponse:
+        return TestClient._client(self).post_json(path, body)
+
+    pub def put(self, path: str, body: str) -> HttpClientResponse:
+        return TestClient._client(self).put(path, body)
+
+    pub def patch(self, path: str, body: str) -> HttpClientResponse:
+        return TestClient._client(self).patch(path, body)
+
+    pub def delete(self, path: str) -> HttpClientResponse:
+        return TestClient._client(self).delete(path)
