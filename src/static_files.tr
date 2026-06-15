@@ -65,9 +65,11 @@ def _send_file(sm: StaticMount, fpath: str, req: HttpRequest, conn: HttpConn):
         HttpConn.send_response(conn, not_mod)
         return
     mut resp = HttpResponse.init(200, content)
-    resp.set_header("Content-Type", content_type_for(fpath))
+    mut ctype = content_type_for(fpath)
+    resp.set_header("Content-Type", ctype)
     resp.set_header("ETag", etag)
-    resp.set_header("Cache-Control", "public, max-age=" + sm.max_age.to_str())
+    mut cache_val = "public, max-age=" + sm.max_age.to_str()
+    resp.set_header("Cache-Control", cache_val)
     HttpConn.send_response(conn, resp)
 
 # Serve `req_path` from a static mount, if the corresponding file exists.
