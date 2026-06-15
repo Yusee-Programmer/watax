@@ -192,10 +192,10 @@ extend App:
             mut prev_req = conn.request
             mut next_req = self._server.read_next(conn._stream)
             if Str.len(next_req.method) == 0:
+                next_req.free_owned()
                 break
             conn.reset_for(next_req)
-            prev_req.headers.free()
-            prev_req.params.free()
+            prev_req.free_owned()
         conn.close()
 
     pub def _dispatch(self, conn: HttpConn):

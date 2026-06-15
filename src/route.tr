@@ -33,27 +33,59 @@ extend Route:
     # '*name' (only valid as the LAST segment) binds the remaining path
     # (joined with '/') as a catch-all, e.g. "/files/*path" matches
     # "/files/a/b/c.txt" with params["path"] == "a/b/c.txt".
+    # Zero-copy: walks both strings index-by-index comparing path segments
+    # in place, without ever splitting into a Vec[str]. The only heap
+    # allocations are the Str.slice() calls for ':name'/'*name' captures
+    # that get stored into req.params (non-empty ones only - empty-range
+    # slices are the "" literal and are never freed).
     pub def matches(self, req: HttpRequest) -> bool:
         if not Str.eq(self.method, req.method): return false
-        mut pp = Str.split_to_vec(self.pattern, "/")
-        mut rp = Str.split_to_vec(req.path, "/")
-        mut i = 0
-        while i < pp.len:
-            mut ps = pp.get(i)
-            if Str.len(ps) > 0 and Str.char_at(ps, 0) == 42:   # '*' catch-all
-                mut name = Str.slice(ps, 1, Str.len(ps))
-                mut rest = Vec[str].init(rp.len - i)
-                mut j = i
-                while j < rp.len:
-                    rest.push(rp.get(j))
-                    j = j + 1
-                req.params.insert(name, Str.join(rest, "/"))
+        mut pat  = self.pattern
+        mut path = req.path
+        mut plen = Str.len(pat)
+        mut rlen = Str.len(path)
+        mut pi = 0
+        mut ri = 0
+        while true:
+            mut pstart = pi
+            while pi < plen and Str.char_at(pat, pi) != 47:
+                pi = pi + 1
+            mut pend = pi
+            mut p_has_next = pi < plen
+            if p_has_next: pi = pi + 1
+
+            if pend > pstart and Str.char_at(pat, pstart) == 42:   # '*' catch-all
+                mut name = Str.slice(pat, pstart + 1, pend)
+                mut rest = Str.slice(path, ri, rlen)
+                req.params.insert(name, rest)
                 return true
-            if i >= rp.len: return false
-            mut rs = rp.get(i)
-            if Str.len(ps) > 0 and Str.char_at(ps, 0) == 58:   # ':' param
-                req.params.insert(Str.slice(ps, 1, Str.len(ps)), rs)
-            elif not Str.eq(ps, rs):
+
+            mut rstart = ri
+            while ri < rlen and Str.char_at(path, ri) != 47:
+                ri = ri + 1
+            mut rend = ri
+            mut r_has_next = ri < rlen
+            if r_has_next: ri = ri + 1
+
+            if p_has_next != r_has_next:
+                # A trailing '*name' catch-all matches even when the path has
+                # no corresponding segment (e.g. "/files/*path" vs "/files").
+                if p_has_next and not r_has_next and pi < plen and Str.char_at(pat, pi) == 42:
+                    mut name = Str.slice(pat, pi + 1, plen)
+                    req.params.insert(name, "")
+                    return true
                 return false
-            i = i + 1
-        return i == rp.len
+
+            mut pseg_len = pend - pstart
+            if pseg_len > 0 and Str.char_at(pat, pstart) == 58:   # ':' param
+                req.params.insert(Str.slice(pat, pstart + 1, pend), Str.slice(path, rstart, rend))
+            else:
+                mut rseg_len = rend - rstart
+                if pseg_len != rseg_len: return false
+                mut k = 0
+                while k < pseg_len:
+                    if Str.char_at(pat, pstart + k) != Str.char_at(path, rstart + k): return false
+                    k = k + 1
+
+            if not p_has_next: return true
+        return false

@@ -36,5 +36,7 @@ from template_ext import render_string
 from http_ext import HttpRequest
 from app import App, Router
 from threaded import ConnJob
+from reactor import ReactorWorker
 from middleware import request_logger_after, set_cors_origin, cors_mw, set_rate_limit, rate_limit_mw, SessionCodec
 from config import Config
+from std.sys.signal import Signal

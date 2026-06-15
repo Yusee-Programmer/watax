@@ -1,0 +1,10 @@
+[package]
+name    = "watax_notes"
+version = "0.1.0"
+desc    = ""
+license = "MIT"
+bin     = "src/main.tr"
+
+[deps]
+watax  = "local:C:\\Users\\Yusee Habibu\\tauProject\\watax"
+templa = "local:C:\\Users\\Yusee Habibu\\tauProject\\templa"

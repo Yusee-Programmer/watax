@@ -1,0 +1,214 @@
+# watax reactor — epoll/select-driven event loop for many keep-alive
+# connections per thread, without a thread per connection.
+#
+# This mirrors the core idea behind tokio/axum's scalability: the cost of an
+# *idle* keep-alive connection (waiting for the client's next request) is
+# just one fd registered with the OS readiness multiplexer (epoll on Linux,
+# select on Windows via the runtime's _TrIOPoll) - not a blocked OS thread.
+# A small, fixed number of worker threads (`listen_reactor_pool`) share one
+# listening socket; each worker's event loop only does CPU/dispatch work for
+# connections that actually have data ready.
+#
+# What this does NOT do (yet): true async handlers. Once a full request is
+# buffered, the route handler runs synchronously to completion on the
+# worker's thread (same as `listen_pooled`) - fine for the fast, CPU-light
+# handlers typical of a JSON/HTML API. A handler that blocks for a long time
+# (slow upstream call, big file I/O) will stall that worker's other
+# connections; use `listen_threaded` for those workloads instead.
+
+from std.io.poll import IOPoll, IOEvent
+from std.net.tcp import TcpStream, TcpListener
+from std.net.http_server import HttpServer, HttpConn, HttpRequest, HttpParser
+from std.string.str import Str
+from std.core.string import StringBuilder
+from std.core.map import Map
+from std.async.thread import Thread
+from std.async.mutex import Mutex
+from std.async.send import Sendable
+from std.sys.signal import Signal
+from app import App
+
+extern "C":
+    def _tr_c_free(ptr: Pointer[char])
+
+# Per-connection reactor state: the non-blocking socket plus a buffer for
+# the request currently being assembled across one or more recv_nb() calls.
+#
+# Note: deliberately named `dispose`, not `free` - a `free(self)` method
+# would make the compiler's auto-drop free this instance when the local
+# `rc` variable that creates it goes out of scope, even though a pointer to
+# it is kept alive in the worker's `conns` map. `dispose` is called
+# explicitly when a connection is removed from that map.
+class RConn:
+    pub fd:             int
+    pub stream:         TcpStream
+    pub read_sb:        StringBuilder
+    pub header_end:     int   # -1 until "\r\n\r\n" has been seen
+    pub content_length: int
+
+extend RConn:
+    pub def init(stream: TcpStream) -> RConn:
+        mut c = RConn()
+        c.fd             = stream.fd
+        c.stream         = stream
+        c.read_sb        = StringBuilder.init(4096)
+        c.header_end     = -1
+        c.content_length = 0
+        return c
+
+    # Read whatever is currently available without blocking.
+    # Returns: 1 = a full request is buffered, 0 = need more data,
+    # -1 = peer closed the connection.
+    pub def poll_read(self) -> int:
+        mut read_any = false
+        while true:
+            mut chunk = self.stream.recv_nb(16384)
+            if self.stream.would_block():
+                break
+            if Str.len(chunk) == 0:
+                return -1
+            read_any = true
+            self.read_sb.append(chunk)
+            unsafe: _tr_c_free(chunk as Pointer[char])
+        if self.header_end < 0:
+            self.header_end = Str.index_of(self.read_sb.as_str(), "\r\n\r\n")
+            if self.header_end < 0:
+                if not read_any: return 0
+                return 0
+            mut hdr = Str.slice(self.read_sb.as_str(), 0, self.header_end)
+            self.content_length = HttpParser.content_length(hdr)
+            unsafe: _tr_c_free(hdr as Pointer[char])
+        mut have = self.read_sb.len() - (self.header_end + 4)
+        if have < self.content_length:
+            return 0
+        return 1
+
+    # Consume the buffered request, parse it, and reset state so this
+    # (keep-alive) connection can buffer the next request.
+    pub def take_request(self) -> HttpRequest:
+        mut raw = self.read_sb.to_owned()
+        mut req = HttpParser.parse(raw)
+        unsafe: _tr_c_free(raw as Pointer[char])
+        self.read_sb.free()
+        self.read_sb    = StringBuilder.init(4096)
+        self.header_end = -1
+        self.content_length = 0
+        return req
+
+    pub def dispose(self):
+        self.read_sb.free()
+        unsafe: _tr_c_free(self as Pointer[char])
+
+# One reactor worker: its own IOPoll + connection table, sharing the App's
+# (read-only) route table and one listening socket with the other workers.
+class ReactorWorker implements Sendable:
+    pub app:      Mutex[App]
+    pub listener: Mutex[TcpListener]
+
+extend ReactorWorker:
+    pub def init(app: App, listener: TcpListener) -> ReactorWorker:
+        mut w = ReactorWorker()
+        w.app      = Mutex[App].init(app)
+        w.listener = Mutex[TcpListener].init(listener)
+        return w
+
+# Sentinel userdata value used for the shared listener fd in each worker's
+# poll set (never a valid socket fd).
+def _listener_ud() -> int: return -1
+
+def _reactor_run(w: ReactorWorker):
+    mut app      = w.app.get()
+    mut listener = w.listener.get()
+
+    mut poll = IOPoll.new()
+    poll.add(listener.fd, IOPoll.POLLIN(), _listener_ud())
+
+    mut conns:     Map[int, RConn]    = Map[int, RConn].init(64)
+    mut httpconns: Map[int, HttpConn] = Map[int, HttpConn].init(64)
+
+    while listener.is_listening() and not Signal.shutdown_requested():
+        mut evs = poll.wait(1000)
+        mut i = 0
+        while i < evs.len:
+            mut ev = evs.get(i)
+            if ev.userdata == _listener_ud():
+                while true:
+                    mut client = listener.accept_nb()
+                    if client.fd < 0: break
+                    client.set_nonblocking()
+                    mut rc = RConn.init(client)
+                    conns.insert(client.fd, rc)
+                    poll.add(client.fd, IOPoll.POLLIN(), client.fd)
+            else:
+                mut fd = ev.userdata
+                if conns.contains(fd):
+                    mut rc = conns.get(fd)
+                    mut status = rc.poll_read()
+                    if status == -1:
+                        poll.remove(fd)
+                        rc.stream.close()
+                        rc.dispose()
+                        conns.remove(fd)
+                        if httpconns.contains(fd):
+                            mut dead_conn = httpconns.get(fd)
+                            dead_conn.dispose()
+                            httpconns.remove(fd)
+                    elif status == 1:
+                        mut req = rc.take_request()
+                        mut conn: HttpConn
+                        if httpconns.contains(fd):
+                            conn = httpconns.get(fd)
+                            mut prev_req = conn.request
+                            conn.reset_for(req)
+                            prev_req.free_owned()
+                        else:
+                            conn = HttpConn.init(req, rc.stream)
+                            httpconns.insert(fd, conn)
+                        App._dispatch(app, conn)
+                        if conn._closed or not conn.request.keep_alive():
+                            poll.remove(fd)
+                            if not conn._closed: conn.close()
+                            conn.dispose()
+                            rc.dispose()
+                            conns.remove(fd)
+                            httpconns.remove(fd)
+            # poll.wait() heap-allocates each IOEvent individually (Vec.free()
+            # below only frees the backing pointer array, not the elements).
+            unsafe: _tr_c_free(ev as Pointer[char])
+            i = i + 1
+        evs.free()
+
+    if Signal.shutdown_requested():
+        print("watax: worker shutting down")
+    poll.destroy()
+
+extend App:
+    # Single-threaded reactor: handles many keep-alive connections on one
+    # thread via non-blocking I/O + IOPoll instead of one thread per
+    # connection.
+    pub def listen_reactor(self, host: str, port: int):
+        App.listen_reactor_pool(self, host, port, 1)
+
+    # `workers` reactor threads share one listening socket. Each worker has
+    # its own IOPoll and connection table; new connections are distributed
+    # across workers by the OS (accept_nb from multiple threads on the same
+    # listening socket is safe - each call either gets a connection or
+    # WOULD_BLOCK).
+    #
+    # Ctrl+C (SIGINT) or SIGTERM trips a shared flag that each worker checks
+    # at every `poll.wait()` timeout (<=1s), so the process exits promptly
+    # without cutting off an in-flight request.
+    pub def listen_reactor_pool(self, host: str, port: int, workers: int):
+        self._server = HttpServer.init(host, port)
+        if not self._server.start():
+            print("watax: failed to bind " + host + ":" + port.to_str())
+            return
+        self._server._listener.set_nonblocking()
+        Signal.install_shutdown_handler()
+        print("watax listening (reactor, " + workers.to_str() + " workers) on http://" + host + ":" + port.to_str())
+        mut i = 1
+        while i < workers:
+            mut t = Thread.spawn(_reactor_run, ReactorWorker.init(self, self._server._listener))
+            t.detach()
+            i = i + 1
+        _reactor_run(ReactorWorker.init(self, self._server._listener))
