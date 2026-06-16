@@ -179,4 +179,4 @@ def main():
     app = app.mount(api)
 
     app = app.on_error(on_error)
-    app.listen(cfg.host, cfg.port)
+    app.listen(cfg.host, 8000)
