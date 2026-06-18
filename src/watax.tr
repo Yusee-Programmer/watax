@@ -33,6 +33,7 @@ from route import Route
 from static_files import StaticMount, content_type_for, serve_static
 from json_ext import Json
 from template_ext import render_string
+from multipart import MultipartForm, MultipartPart
 from http_ext import HttpRequest
 from app import App, Router
 from threaded import ConnJob

@@ -237,6 +237,16 @@ extend App:
             ai = ai + 1
 
     def _dispatch_inner(self, conn: HttpConn):
+        # Reject over-limit bodies before any middleware/handler runs. The
+        # server stopped reading the oversized body, so the connection can't be
+        # safely reused - send 413 and mark it closed so the keep-alive loop
+        # tears it down (after-hooks still run; conn.request stays valid until
+        # _serve_conn calls conn.close()).
+        if conn.request.oversized:
+            conn.send_text(413, "Payload Too Large")
+            conn._closed = true
+            return
+
         # Run global middleware first; any of them can short-circuit by
         # returning false after sending its own response.
         mut mi = 0

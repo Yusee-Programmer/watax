@@ -1,0 +1,193 @@
+# watax multipart/form-data parsing — multi-field forms and file uploads.
+#
+#   mut form = c.request.multipart()
+#   mut name = form.field("username")          # a text field
+#   mut up   = form.get("avatar")              # a file part
+#   if up.is_file(): up.save("./uploads/" + up.filename)
+#   form.dispose()                             # free when done
+#
+# LIMITATION: bodies are Tauraro `str` (NUL-terminated), so a file containing
+# NUL bytes is truncated at the first NUL - the same text-protocol limitation
+# as the rest of the HTTP layer. Fine for text fields and text/CSV/JSON/SVG
+# uploads; true binary uploads need a length-carrying byte buffer (future work).
+
+from std.net.http_server import HttpConn, HttpRequest
+from std.string.str import Str
+from std.io.file import File
+from core.vec import Vec
+
+extern "C":
+    def _tr_c_free(ptr: Pointer[char])
+
+# One part of a multipart body: a named text field, or an uploaded file.
+pub class MultipartPart:
+    pub name:         str   # the form field name
+    pub filename:     str   # original filename for file parts; "" for plain fields
+    pub content_type: str   # the part's own Content-Type; "" if absent
+    pub data:         str   # the field value / file contents
+
+extend MultipartPart:
+    pub def init() -> MultipartPart:
+        mut p = MultipartPart()
+        p.name         = ""
+        p.filename     = ""
+        p.content_type = ""
+        p.data         = ""
+        return p
+
+    # True when this part was sent as an uploaded file (it has a filename).
+    pub def is_file(self) -> bool:
+        return Str.len(self.filename) > 0
+
+    # Write this part's data to `path` on disk. Returns false on failure.
+    pub def save(self, path: str) -> bool:
+        return File.write_text(path, self.data)
+
+    # Release this part's heap strings and the struct itself. Named dispose()
+    # (not free()) to stay out of auto-drop - parts live inside a Vec owned by
+    # MultipartForm, which frees them in MultipartForm.dispose().
+    pub def dispose(self):
+        unsafe:
+            _tr_c_free(self.name as Pointer[char])
+            _tr_c_free(self.filename as Pointer[char])
+            _tr_c_free(self.content_type as Pointer[char])
+            _tr_c_free(self.data as Pointer[char])
+            _tr_c_free(self as Pointer[char])
+
+# A parsed multipart form: an ordered collection of parts.
+pub class MultipartForm:
+    pub parts: Vec[MultipartPart]
+
+extend MultipartForm:
+    pub def init() -> MultipartForm:
+        mut f = MultipartForm()
+        f.parts = Vec[MultipartPart].init(8)
+        return f
+
+    # First part with the given field name, or an empty part if absent.
+    pub def get(self, name: str) -> MultipartPart:
+        mut i = 0
+        while i < self.parts.len:
+            mut p = self.parts.get(i)
+            if Str.eq(p.name, name):
+                return p
+            i = i + 1
+        return MultipartPart.init()
+
+    # The string value of a named field, or "" if absent.
+    pub def field(self, name: str) -> str:
+        return MultipartForm.get(self, name).data
+
+    pub def has(self, name: str) -> bool:
+        mut i = 0
+        while i < self.parts.len:
+            if Str.eq(self.parts.get(i).name, name): return true
+            i = i + 1
+        return false
+
+    pub def len(self) -> int:
+        return self.parts.len
+
+    # Free every part and the backing vector.
+    pub def dispose(self):
+        mut i = 0
+        while i < self.parts.len:
+            self.parts.get(i).dispose()
+            i = i + 1
+        self.parts.free()
+
+# Extract a quoted header attribute, e.g. _extract_attr(line, "name") pulls
+# `bob` out of `... name="bob"; filename="x"`. Returns "" when absent.
+def _extract_attr(line: str, attr: str) -> str:
+    mut key  = attr + "=\""
+    mut idx  = Str.index_of(line, key)
+    mut klen = Str.len(key)
+    unsafe: _tr_c_free(key as Pointer[char])
+    if idx < 0: return ""
+    mut start = idx + klen
+    mut rest  = Str.slice(line, start, Str.len(line))
+    mut endq  = Str.index_of(rest, "\"")
+    mut val: str = ""
+    if endq >= 0: val = Str.slice(rest, 0, endq)
+    unsafe: _tr_c_free(rest as Pointer[char])
+    return val
+
+# Extract a part's own "Content-Type:" header value (trimmed), or "".
+def _extract_part_ct(head: str) -> str:
+    mut idx = Str.index_of(head, "Content-Type:")
+    if idx < 0: return ""
+    mut rest = Str.slice(head, idx + 13, Str.len(head))
+    mut nl   = Str.index_of(rest, "\r\n")
+    mut val: str = ""
+    if nl >= 0: val = Str.trim(Str.slice(rest, 0, nl))
+    else:       val = Str.trim(rest)
+    unsafe: _tr_c_free(rest as Pointer[char])
+    return val
+
+# Parse one inter-delimiter segment into a part and append it to `form`.
+# Skips the preamble (before the first boundary) and the closing "--" marker.
+def _parse_segment(form: MultipartForm, seg: str):
+    mut n = Str.len(seg)
+    if n < 4: return
+    # The segment after the final boundary begins with "--" (close-delimiter).
+    if Str.char_at(seg, 0) == 45 and Str.char_at(seg, 1) == 45: return
+    mut sep = Str.index_of(seg, "\r\n\r\n")
+    if sep < 0: return
+    mut data_start = sep + 4
+    mut data_end   = n
+    # Drop the trailing CRLF that separates this part from the next delimiter.
+    if data_end >= data_start + 2 and Str.char_at(seg, data_end - 2) == 13 and Str.char_at(seg, data_end - 1) == 10:
+        data_end = data_end - 2
+    mut head = Str.slice(seg, 0, sep)
+    mut part = MultipartPart.init()
+    # Assign fresh expressions directly into the fields (never a named local),
+    # so the codegen moves ownership in without an unbalanced retain (#53).
+    part.data         = Str.slice(seg, data_start, data_end)
+    part.name         = _extract_attr(head, "name")
+    part.filename     = _extract_attr(head, "filename")
+    part.content_type = _extract_part_ct(head)
+    unsafe: _tr_c_free(head as Pointer[char])
+    form.parts.push(part)
+
+extend HttpRequest:
+    # Parse this request's body as multipart/form-data. Returns an empty form
+    # when the request isn't multipart or has no boundary. Call form.dispose()
+    # when done to release the parsed parts.
+    pub def multipart(self) -> MultipartForm:
+        mut form = MultipartForm.init()
+        mut ct   = self.content_type()
+        mut bidx = Str.index_of(ct, "boundary=")
+        if bidx < 0:
+            unsafe: _tr_c_free(ct as Pointer[char])
+            return form
+        mut braw = Str.slice(ct, bidx + 9, Str.len(ct))
+        unsafe: _tr_c_free(ct as Pointer[char])
+        # The boundary token runs to the next ';' parameter or end of header.
+        mut semi      = Str.index_of(braw, ";")
+        mut bval      = braw
+        mut bval_owned = false
+        if semi >= 0:
+            bval = Str.slice(braw, 0, semi)
+            bval_owned = true
+        mut boundary = Str.trim(bval)
+        if bval_owned: unsafe: _tr_c_free(bval as Pointer[char])
+        unsafe: _tr_c_free(braw as Pointer[char])
+        if Str.len(boundary) == 0:
+            unsafe: _tr_c_free(boundary as Pointer[char])
+            return form
+        # On-the-wire parts are separated by "--" + boundary.
+        mut delim = "--" + boundary
+        unsafe: _tr_c_free(boundary as Pointer[char])
+        mut segs = Str.split_to_vec(self.body, delim)
+        unsafe: _tr_c_free(delim as Pointer[char])
+        mut i = 0
+        while i < segs.len:
+            # .get() returns a retained copy; _parse_segment copies what it needs
+            # out via Str.slice, so release this reference right after. segs.free()
+            # then drops the vector's own refs and frees the slices.
+            mut seg: str = segs.get(i)
+            _parse_segment(form, seg)
+            unsafe: _tr_c_free(seg as Pointer[char])
+            i = i + 1
+        segs.free()
+        return form
