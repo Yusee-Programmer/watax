@@ -96,58 +96,58 @@ extend MultipartForm:
             i = i + 1
         self.parts.free()
 
-# Extract a quoted header attribute, e.g. _extract_attr(line, "name") pulls
-# `bob` out of `... name="bob"; filename="x"`. Returns "" when absent.
-def _extract_attr(line: str, attr: str) -> str:
-    mut key  = attr + "=\""
-    mut idx  = Str.index_of(line, key)
-    mut klen = Str.len(key)
-    unsafe: _tr_c_free(key as Pointer[char])
-    if idx < 0: return ""
-    mut start = idx + klen
-    mut rest  = Str.slice(line, start, Str.len(line))
-    mut endq  = Str.index_of(rest, "\"")
-    mut val: str = ""
-    if endq >= 0: val = Str.slice(rest, 0, endq)
-    unsafe: _tr_c_free(rest as Pointer[char])
-    return val
+    # Extract a quoted header attribute, e.g. attr "name" pulls `bob` out of
+    # `... name="bob"; filename="x"`. Returns "" when absent.
+    def _extract_attr(line: str, attr: str) -> str:
+        mut key  = attr + "=\""
+        mut idx  = Str.index_of(line, key)
+        mut klen = Str.len(key)
+        unsafe: _tr_c_free(key as Pointer[char])
+        if idx < 0: return ""
+        mut start = idx + klen
+        mut rest  = Str.slice(line, start, Str.len(line))
+        mut endq  = Str.index_of(rest, "\"")
+        mut val: str = ""
+        if endq >= 0: val = Str.slice(rest, 0, endq)
+        unsafe: _tr_c_free(rest as Pointer[char])
+        return val
 
-# Extract a part's own "Content-Type:" header value (trimmed), or "".
-def _extract_part_ct(head: str) -> str:
-    mut idx = Str.index_of(head, "Content-Type:")
-    if idx < 0: return ""
-    mut rest = Str.slice(head, idx + 13, Str.len(head))
-    mut nl   = Str.index_of(rest, "\r\n")
-    mut val: str = ""
-    if nl >= 0: val = Str.trim(Str.slice(rest, 0, nl))
-    else:       val = Str.trim(rest)
-    unsafe: _tr_c_free(rest as Pointer[char])
-    return val
+    # Extract a part's own "Content-Type:" header value (trimmed), or "".
+    def _extract_part_ct(head: str) -> str:
+        mut idx = Str.index_of(head, "Content-Type:")
+        if idx < 0: return ""
+        mut rest = Str.slice(head, idx + 13, Str.len(head))
+        mut nl   = Str.index_of(rest, "\r\n")
+        mut val: str = ""
+        if nl >= 0: val = Str.trim(Str.slice(rest, 0, nl))
+        else:       val = Str.trim(rest)
+        unsafe: _tr_c_free(rest as Pointer[char])
+        return val
 
-# Parse one inter-delimiter segment into a part and append it to `form`.
-# Skips the preamble (before the first boundary) and the closing "--" marker.
-def _parse_segment(form: MultipartForm, seg: str):
-    mut n = Str.len(seg)
-    if n < 4: return
-    # The segment after the final boundary begins with "--" (close-delimiter).
-    if Str.char_at(seg, 0) == 45 and Str.char_at(seg, 1) == 45: return
-    mut sep = Str.index_of(seg, "\r\n\r\n")
-    if sep < 0: return
-    mut data_start = sep + 4
-    mut data_end   = n
-    # Drop the trailing CRLF that separates this part from the next delimiter.
-    if data_end >= data_start + 2 and Str.char_at(seg, data_end - 2) == 13 and Str.char_at(seg, data_end - 1) == 10:
-        data_end = data_end - 2
-    mut head = Str.slice(seg, 0, sep)
-    mut part = MultipartPart.init()
-    # Assign fresh expressions directly into the fields (never a named local),
-    # so the codegen moves ownership in without an unbalanced retain (#53).
-    part.data         = Str.slice(seg, data_start, data_end)
-    part.name         = _extract_attr(head, "name")
-    part.filename     = _extract_attr(head, "filename")
-    part.content_type = _extract_part_ct(head)
-    unsafe: _tr_c_free(head as Pointer[char])
-    form.parts.push(part)
+    # Parse one inter-delimiter segment into a part and append it to `form`.
+    # Skips the preamble (before the first boundary) and the closing "--" marker.
+    def _parse_segment(form: MultipartForm, seg: str):
+        mut n = Str.len(seg)
+        if n < 4: return
+        # The segment after the final boundary begins with "--" (close-delimiter).
+        if Str.char_at(seg, 0) == 45 and Str.char_at(seg, 1) == 45: return
+        mut sep = Str.index_of(seg, "\r\n\r\n")
+        if sep < 0: return
+        mut data_start = sep + 4
+        mut data_end   = n
+        # Drop the trailing CRLF that separates this part from the next delimiter.
+        if data_end >= data_start + 2 and Str.char_at(seg, data_end - 2) == 13 and Str.char_at(seg, data_end - 1) == 10:
+            data_end = data_end - 2
+        mut head = Str.slice(seg, 0, sep)
+        mut part = MultipartPart.init()
+        # Assign fresh expressions directly into the fields (never a named local),
+        # so the codegen moves ownership in without an unbalanced retain (#53).
+        part.data         = Str.slice(seg, data_start, data_end)
+        part.name         = MultipartForm._extract_attr(head, "name")
+        part.filename     = MultipartForm._extract_attr(head, "filename")
+        part.content_type = MultipartForm._extract_part_ct(head)
+        unsafe: _tr_c_free(head as Pointer[char])
+        form.parts.push(part)
 
 extend HttpRequest:
     # Parse this request's body as multipart/form-data. Returns an empty form
@@ -186,7 +186,7 @@ extend HttpRequest:
             # out via Str.slice, so release this reference right after. segs.free()
             # then drops the vector's own refs and frees the slices.
             mut seg: str = segs.get(i)
-            _parse_segment(form, seg)
+            MultipartForm._parse_segment(form, seg)
             unsafe: _tr_c_free(seg as Pointer[char])
             i = i + 1
         segs.free()

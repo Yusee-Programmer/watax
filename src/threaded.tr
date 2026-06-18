@@ -46,6 +46,7 @@ extend App:
     # templates, slow upstream calls) and you want concurrent clients.
     pub def listen_threaded(self, host: str, port: int):
         self._server = HttpServer.init(host, port)
+        App._configure_server(self)
         if not self._server.start():
             print("watax: failed to bind " + host + ":" + port.to_str())
             return
@@ -83,6 +84,7 @@ extend App:
     # The calling thread blocks forever as one of the workers.
     pub def listen_pooled(self, host: str, port: int, workers: int):
         self._server = HttpServer.init(host, port)
+        App._configure_server(self)
         if not self._server.start():
             print("watax: failed to bind " + host + ":" + port.to_str())
             return

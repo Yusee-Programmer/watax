@@ -70,6 +70,7 @@ pub class App:
     pub _server:     HttpServer
     pub _on_error:   def(HttpConn, int) -> void
     pub _has_error_handler: bool
+    pub _max_body:   int   # request-body cap in bytes applied to the server; -1 = use server default
 
 extend App:
     pub def new() -> App:
@@ -79,7 +80,20 @@ extend App:
         a._after      = Vec[def(HttpConn) -> void].init(2)
         a._statics    = Vec[StaticMount].init(2)
         a._has_error_handler = false
+        a._max_body   = -1
         return a
+
+    # Set the maximum accepted request-body size in bytes (0 = unlimited).
+    # Oversized requests are answered 413 before any handler runs. Call before
+    # listen*(). Defaults to the server's 8 MiB cap when left unset.
+    pub def body_limit(self, bytes: int) -> App:
+        self._max_body = bytes
+        return self
+
+    # Apply pending config (body limit, ...) to a freshly created server.
+    def _configure_server(self):
+        if self._max_body >= 0:
+            self._server.set_max_body(self._max_body)
 
     # ── Route registration (chainable: each returns the App) ──────────────────
     pub def route(self, method: str, pattern: str, handler: def(HttpConn) -> void) -> App:
@@ -175,6 +189,7 @@ extend App:
     # against the route table and dispatched to its handler; unmatched -> 404.
     pub def listen(self, host: str, port: int):
         self._server = HttpServer.init(host, port)
+        App._configure_server(self)
         if not self._server.start():
             print("watax: failed to bind " + host + ":" + port.to_str())
             return
@@ -191,6 +206,7 @@ extend App:
     # instead of blocking an OS thread. Scales to many concurrent connections.
     pub def listen_async(self, host: str, port: int, workers: int):
         self._server = HttpServer.init(host, port)
+        App._configure_server(self)
         if not self._server.start():
             print("watax: failed to bind " + host + ":" + port.to_str())
             return

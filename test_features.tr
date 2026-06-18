@@ -1,0 +1,13 @@
+from watax import App
+from std.net.http_server import HttpConn
+
+def upload(c: HttpConn):
+    mut form = c.request.multipart()
+    mut name = form.field("name")
+    form.dispose()
+    c.send_text(200, "name=" + name)
+
+def main():
+    mut app = App.new()
+    app = app.post("/upload", upload)
+    app.listen_async("127.0.0.1", 8096, 2)
