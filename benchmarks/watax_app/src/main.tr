@@ -148,7 +148,6 @@ def fortunes(c: HttpConn):
     sb.append("</td></tr></table></body></html>")
     c.send_html(200, sb.to_owned())
     sb.free()
-    sb.free()
 
 # WebSocket echo (RFC 6455). Not part of the wrk throughput table (wrk speaks
 # HTTP, not WebSocket), but demonstrates watax's WebSocket support: upgrade the
