@@ -54,12 +54,19 @@ jobs:
           echo "taupkg: $TAUPKG"
 
           # 2. Install the latest tauraroc (downloads from tauraro/tauraro).
-          "$TAUPKG" install-tauraro --verbose
+          #    install-tauraro succeeds but returns non-zero on Linux/macOS (it
+          #    edits ~/.profile/.bashrc), so tolerate the exit code and verify by
+          #    locating the binary instead.
+          "$TAUPKG" install-tauraro --verbose || true
 
           # 3. Locate the freshly installed tauraroc and export its path so the
           #    build step (and any later step) uses it without PATH juggling.
-          TAURAROC=$(find "$HOME/.taupkg/bin" "${USERPROFILE:-/nonexistent}/.taupkg/bin" \
-                       -name "tauraroc${EXT}" -type f 2>/dev/null | head -1)
+          #    Each find runs on a single existing root so its exit code never
+          #    trips `set -e` (a missing root would make find non-zero).
+          TAURAROC=$(find "$HOME/.taupkg/bin" -name "tauraroc${EXT}" -type f 2>/dev/null | head -1)
+          if [ -z "$TAURAROC" ] && [ -n "${USERPROFILE:-}" ]; then
+            TAURAROC=$(find "$USERPROFILE/.taupkg/bin" -name "tauraroc${EXT}" -type f 2>/dev/null | head -1)
+          fi
           [ -z "$TAURAROC" ] && { echo "error: tauraroc not found after install-tauraro"; exit 1; }
           echo "tauraroc: $TAURAROC ($("$TAURAROC" --version 2>/dev/null || echo '?'))"
           echo "TAURAROC=$TAURAROC" >> "$GITHUB_ENV"
@@ -131,8 +138,9 @@ jobs:
             --pattern "taupkg-linux-x64.zip" --dir taupkg-dl --clobber
           mkdir -p taupkg-bin && unzip -oq "taupkg-dl/taupkg-linux-x64.zip" -d taupkg-bin
           TAUPKG=$(find taupkg-bin -name "taupkg" -type f | head -1); chmod +x "$TAUPKG"
-          "$TAUPKG" install-tauraro --verbose
-          TAURAROC=$(find "$HOME/.taupkg/bin" -name "tauraroc" -type f | head -1)
+          "$TAUPKG" install-tauraro --verbose || true     # exits non-zero on Linux despite success
+          TAURAROC=$(find "$HOME/.taupkg/bin" -name "tauraroc" -type f 2>/dev/null | head -1)
+          [ -z "$TAURAROC" ] && { echo "error: tauraroc not found"; exit 1; }
           echo "TAURAROC=$TAURAROC" >> "$GITHUB_ENV"
           "$TAUPKG" install || true
           if [ ! -d .taupkg/packages/templa ]; then
