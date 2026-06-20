@@ -6,18 +6,17 @@ routes in registration order; the first match wins.
 ## Methods
 
 ```tauraro
-app = app.get("/posts", list_posts)
-app = app.post("/posts", create_post)
-app = app.put("/posts/:id", replace_post)
-app = app.patch("/posts/:id", update_post)
-app = app.delete("/posts/:id", delete_post)
-
-# Any method, explicitly:
-app = app.route("OPTIONS", "/posts", preflight)
+mut app = App.new()
+    .get("/posts", list_posts)
+    .post("/posts", create_post)
+    .put("/posts/:id", replace_post)
+    .patch("/posts/:id", update_post)
+    .delete("/posts/:id", delete_post)
+    .route("OPTIONS", "/posts", preflight)   # any method, explicitly
 ```
 
-Each returns the app, so they **chain** — `App.new().get(...).post(...)` on one
-line, or indented `.get(...)` continuations across lines.
+Each method returns the app, so calls **chain** — either across lines as above,
+or on one line: `App.new().get(...).post(...)`.
 
 ## Path parameters
 
@@ -28,8 +27,9 @@ def show_user(c: HttpConn):
     mut id = c.request.get_param("id")     # "/users/42" -> "42"
     c.send_text(200, "user " + id)
 
-app = app.get("/users/:id", show_user)
-app = app.get("/users/:id/posts/:slug", show_post)   # multiple params
+mut app = App.new()
+    .get("/users/:id", show_user)
+    .get("/users/:id/posts/:slug", show_post)   # multiple params
 ```
 
 `get_param` returns `""` for an absent parameter. Parse numbers with
@@ -59,16 +59,15 @@ Group related routes under a shared prefix and middleware with a `Router`, then
 
 ```tauraro
 def api_routes() -> Router:
-    mut r = Router.init("/api")
-    r = r.use(cors_mw)                 # group-local middleware
-    r = r.get("/health", health)
-    r = r.get("/users/:id", api_user)
-    return r
+    return Router.init("/api")
+        .use(cors_mw)                  # group-local middleware
+        .get("/health", health)
+        .get("/users/:id", api_user)
 
 def main():
     mut app = App.new()
-    app = app.mount(api_routes())      # all routes get the /api prefix
-    app = app.get("/", home)
+        .mount(api_routes())           # all routes get the /api prefix
+        .get("/", home)
     app.listen_reactor_pool("127.0.0.1", 8080, 4)
 ```
 

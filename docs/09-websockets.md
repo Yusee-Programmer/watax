@@ -19,7 +19,7 @@ def chat(c: HttpConn):
 
 def main():
     mut app = App.new()
-    app = app.get("/ws", chat)
+        .get("/ws", chat)
     app.listen_reactor_pool("127.0.0.1", 8080, 4)
 ```
 

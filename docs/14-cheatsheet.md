@@ -6,18 +6,18 @@ A one-page reference. Deep dives are linked from the [docs index](../README.md#d
 
 ```tauraro
 mut app = App.new()
-app = app.use(mw)                       # before middleware  (def(HttpConn)->bool)
-app = app.use_after(hook)               # after hook         (def(HttpConn)->void)
-app = app.static_dir("/static", "./public")
-app = app.body_limit(1048576)           # 413 over 1 MiB
-app = app.get("/", home)
-app = app.post("/users", create)
-app = app.put("/users/:id", replace)
-app = app.patch("/users/:id", update)
-app = app.delete("/users/:id", remove)
-app = app.route("OPTIONS", "/users", preflight)
-app = app.mount(router)                 # mount a Router (prefix + group mw)
-app = app.on_error(not_found)           # def(HttpConn, int)->void
+    .use(mw)                            # before middleware  (def(HttpConn)->bool)
+    .use_after(hook)                    # after hook         (def(HttpConn)->void)
+    .static_dir("/static", "./public")
+    .body_limit(1048576)                # 413 over 1 MiB
+    .get("/", home)
+    .post("/users", create)
+    .put("/users/:id", replace)
+    .patch("/users/:id", update)
+    .delete("/users/:id", remove)
+    .route("OPTIONS", "/users", preflight)
+    .mount(router)                      # mount a Router (prefix + group mw)
+    .on_error(not_found)                # def(HttpConn, int)->void
 app.listen_reactor_pool("127.0.0.1", 8080, 4)
 ```
 

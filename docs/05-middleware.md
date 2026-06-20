@@ -95,9 +95,9 @@ Attach middleware to a subtree instead of the whole app via a `Router`:
 
 ```tauraro
 mut api = Router.init("/api")
-api = api.use(cors_mw)            # only /api/* gets CORS
-api = api.use(rate_limit_mw)
-api = api.get("/users/:id", api_user)
+    .use(cors_mw)                # only /api/* gets CORS
+    .use(rate_limit_mw)
+    .get("/users/:id", api_user)
 app = app.mount(api)
 ```
 

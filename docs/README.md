@@ -46,8 +46,8 @@ def user(c: HttpConn):
 
 def main():
     mut app = App.new()
-    app = app.get("/", hello)
-    app = app.get("/users/:id", user)
+        .get("/", hello)
+        .get("/users/:id", user)
     app.listen_reactor_pool("127.0.0.1", 8080, 4)
 ```
 

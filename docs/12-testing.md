@@ -13,9 +13,8 @@ def home(c: HttpConn):
     c.send_text(200, "Hello, World!")
 
 def build_app() -> App:
-    mut app = App.new()
-    app = app.get("/", home)
-    return app
+    return App.new()
+        .get("/", home)
 
 def main():
     mut client = TestClient.start(build_app(), 8199)   # boots the app on :8199

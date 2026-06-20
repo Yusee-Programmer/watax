@@ -11,7 +11,7 @@ from watax import Config
 def main():
     mut cfg = Config.from_env()
     mut app = App.new()
-    app = app.static_dir("/static", cfg.static_dir)
+        .static_dir("/static", cfg.static_dir)
     app.listen_reactor_pool(cfg.host, cfg.port, 4)
 ```
 

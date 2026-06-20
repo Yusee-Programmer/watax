@@ -33,7 +33,7 @@ def home(c: HttpConn):
 
 def main():
     mut app = App.new()
-    app = app.get("/", home)
+        .get("/", home)
     app.listen_reactor_pool("127.0.0.1", 8080, 4)
 ```
 
