@@ -16,14 +16,18 @@
 #   GET /fortunes           -> HTML table, one row added at request time, escaped
 #   GET /plaintext-big      -> ~8 KB plain text (large response)
 #
-# Memory note: handlers free NOTHING. send_json_value takes ownership of the
-# JsonValue tree and frees it; send_text/send_html bodies are freed by the
-# framework. No manual memory management in user code.
+# Memory note: response bodies are freed by the framework. send_json_value takes
+# ownership of the JsonValue tree and frees it; send_text/send_html copy the body
+# and the compiler releases it after the call when it's passed as a FRESH
+# expression (e.g. `send_text(200, sb.to_owned())`) — which is why the fortunes /
+# plaintext-big handlers build into a StringBuilder and pass sb.to_owned() inline.
+# No manual memory management in user code.
 
 from watax import App, html_escape, WsConn
 from std.net.http_server import HttpConn
 from std.encoding.json import JsonValue
 from std.string.str import Str
+from std.core.string import StringBuilder
 from std.math.random import Random
 from core.vec import Vec
 
@@ -123,14 +127,28 @@ def updates(c: HttpConn):
 # TechEmpower: fortunes — render an HTML table, with one fortune added at request
 # time, every message HTML-escaped (exercises templating + escaping).
 def fortunes(c: HttpConn):
-    mut html = "<!DOCTYPE html><html><head><title>Fortunes</title></head><body><table><tr><th>id</th><th>message</th></tr>"
+    # Build into a StringBuilder and pass sb.to_owned() INLINE to send_html: a
+    # fresh expression handed to a call is released by the compiler after the
+    # call, so the body is freed with no manual cleanup. (Passing it via a named
+    # `mut html` local would currently leak the final string, since a named local
+    # given to a method is treated as moved and not auto-dropped — a known
+    # compiler limitation; the inline form sidesteps it.)
+    mut sb = StringBuilder.init(2048)
+    sb.append("<!DOCTYPE html><html><head><title>Fortunes</title></head><body><table><tr><th>id</th><th>message</th></tr>")
     mut i = 0
     while i < FORTUNES.len:
-        html = html + "<tr><td>" + (i + 1).to_str() + "</td><td>" + html_escape(FORTUNES.get(i)) + "</td></tr>"
+        sb.append("<tr><td>")
+        sb.append((i + 1).to_str())
+        sb.append("</td><td>")
+        sb.append(html_escape(FORTUNES.get(i)))
+        sb.append("</td></tr>")
         i = i + 1
-    html = html + "<tr><td>0</td><td>" + html_escape("Additional fortune added at request time.") + "</td></tr>"
-    html = html + "</table></body></html>"
-    c.send_html(200, html)
+    sb.append("<tr><td>0</td><td>")
+    sb.append(html_escape("Additional fortune added at request time."))
+    sb.append("</td></tr></table></body></html>")
+    c.send_html(200, sb.to_owned())
+    sb.free()
+    sb.free()
 
 # WebSocket echo (RFC 6455). Not part of the wrk throughput table (wrk speaks
 # HTTP, not WebSocket), but demonstrates watax's WebSocket support: upgrade the
@@ -144,14 +162,18 @@ def ws_echo(c: HttpConn):
         ws.send_text(msg)
     ws.send_close()
 
-# Large plain-text response (~8 KB): stresses the write path.
+# Large plain-text response (~11 KB): stresses the write path. Uses a
+# StringBuilder for O(n) construction (256 appends; repeated `+` concatenation
+# would be O(n^2)). The compiler releases the fresh sb.to_owned() after the call,
+# so the body is freed with no manual cleanup.
 def plaintext_big(c: HttpConn):
-    mut s = ""
+    mut sb = StringBuilder.init(11600)
     mut i = 0
     while i < 256:
-        s = s + "The quick brown fox jumps over the lazy dog. "
+        sb.append("The quick brown fox jumps over the lazy dog. ")
         i = i + 1
-    c.send_text(200, s)
+    c.send_text(200, sb.to_owned())
+    sb.free()
 
 # ── Wiring ────────────────────────────────────────────────────────────────────
 
