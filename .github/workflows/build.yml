@@ -122,11 +122,13 @@ jobs:
 
   # ===================================================================
   # Benchmark: watax vs axum (Rust) vs FastAPI (Python) on Linux, then
-  # COMMIT benchmarks/results.md back to the repo (master push only).
+  # COMMIT benchmarks/results.md back to the repo (default-branch push only).
   # ===================================================================
   benchmark:
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    # Run on pushes to the repository's DEFAULT branch, whatever it's named
+    # (this repo uses `main`), then commit results.md back.
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -164,8 +166,10 @@ jobs:
             git clone --depth 1 https://github.com/Yusee-Programmer/templa.git .taupkg/packages/templa
           fi
 
-      - name: Install benchmark toolchains (Rust, FastAPI)
+      - name: Install benchmark toolchains (wrk, Rust, FastAPI)
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wrk
           rustup show >/dev/null 2>&1 || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           python3 -m pip install --quiet --upgrade pip

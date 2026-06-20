@@ -22,7 +22,12 @@ LOADTEST="$BENCH/loadtest.py"
 
 CONC="${BENCH_CONC:-50}"        # concurrent keep-alive connections
 DUR="${BENCH_DUR:-8}"           # seconds per endpoint
+THREADS="${BENCH_THREADS:-4}"   # wrk worker threads
 PY="$(command -v python3 || command -v python || echo python3)"
+
+# Load generator: prefer wrk (fast, accurate), fall back to the bundled
+# dependency-free loadtest.py when wrk isn't installed (e.g. on Windows).
+WRK="$(command -v wrk || true)"
 
 # ── tauraroc resolution: env TAURAROC, then PATH, then known install ───────────
 TAU_EXE="${TAURAROC:-}"
@@ -38,13 +43,35 @@ GRN='\033[0;32m'; YLW='\033[0;33m'; CYN='\033[0;36m'; RST='\033[0m'
 # Peak RSS (kB) of a pid, from /proc VmHWM (Linux high-water mark; persists).
 peak_rss_kb() { awk '/^VmHWM/{print $2}' "/proc/$1/status" 2>/dev/null; }
 
-# Run loadtest against $1; echo "rps|errors|latency_ms" (empty fields on failure).
+# Run a load test against $1; echo "rps|errors|latency_ms" (empty on failure).
 runload() {
-    "$PY" "$LOADTEST" "$1" "$CONC" "$DUR" 2>/dev/null | awk -F: '
-        /Req\/sec/      {gsub(/ /,"",$2); rps=$2}
-        /Errors/        {gsub(/ /,"",$2); err=$2}
-        /Avg latency/   {gsub(/ms/,"",$2); gsub(/ /,"",$2); lat=$2}
-        END {print rps"|"err"|"lat}'
+    if [ -n "$WRK" ]; then
+        # wrk --latency reports Requests/sec, the avg Latency (with a unit),
+        # plus socket errors and non-2xx counts. Normalize latency to ms.
+        "$WRK" -t"$THREADS" -c"$CONC" -d"${DUR}s" --latency "$1" 2>/dev/null | awk '
+            /Requests\/sec/ { rps=$2 }
+            # Thread-Stats avg latency line: "Latency  2.10ms ..." (digit after
+            # Latency) — not the "Latency Distribution" header that --latency adds.
+            /^[[:space:]]*Latency[[:space:]]+[0-9]/ {
+                v=$2
+                if      (v ~ /us$/) { sub(/us/,"",v); lat=v/1000 }
+                else if (v ~ /ms$/) { sub(/ms/,"",v); lat=v }
+                else if (v ~ /s$/)  { sub(/s/,"",v);  lat=v*1000 }
+                else                { lat=v }
+            }
+            /Non-2xx or 3xx responses/ { n2=$NF }
+            /Socket errors/ { to=$NF }   # timeout count is the last field
+            END {
+                e=(n2=="" ? 0 : n2) + (to=="" ? 0 : to)
+                printf "%s|%d|%.3f", rps, e, lat
+            }'
+    else
+        "$PY" "$LOADTEST" "$1" "$CONC" "$DUR" 2>/dev/null | awk -F: '
+            /Req\/sec/      {gsub(/ /,"",$2); rps=$2}
+            /Errors/        {gsub(/ /,"",$2); err=$2}
+            /Avg latency/   {gsub(/ms/,"",$2); gsub(/ /,"",$2); lat=$2}
+            END {print rps"|"err"|"lat}'
+    fi
 }
 
 declare -a ROWS=()   # "framework|endpoint|rps|errors|latency|peakKB"
@@ -80,7 +107,11 @@ PYEOF
 echo ""
 printf "${CYN}=================================================================${RST}\n"
 printf "${CYN}  watax HTTP Benchmark — watax vs axum (Rust) vs FastAPI (Python)${RST}\n"
-printf "${CYN}  concurrency=%s duration=%ss/endpoint${RST}\n" "$CONC" "$DUR"
+if [ -n "$WRK" ]; then
+    printf "${CYN}  load: wrk  %s threads × %s conns × %ss/endpoint${RST}\n" "$THREADS" "$CONC" "$DUR"
+else
+    printf "${YLW}  load: loadtest.py (wrk not found)  %s conns × %ss/endpoint${RST}\n" "$CONC" "$DUR"
+fi
 printf "${CYN}=================================================================${RST}\n\n"
 
 # ── watax ─────────────────────────────────────────────────────────────────────
@@ -143,7 +174,11 @@ fi
     echo ""
     echo "- **Host:** $(uname -s) $(uname -m)"
     echo "- **Date (UTC):** $(date -u '+%Y-%m-%d %H:%M:%S')"
-    echo "- **Load:** ${CONC} keep-alive connections × ${DUR}s per endpoint"
+    if [ -n "$WRK" ]; then
+        echo "- **Load:** \`wrk\` — ${THREADS} threads × ${CONC} connections × ${DUR}s per endpoint"
+    else
+        echo "- **Load:** \`loadtest.py\` — ${CONC} keep-alive connections × ${DUR}s per endpoint"
+    fi
     if [ -n "$TAU_EXE" ]; then echo "- **Compiler:** \`$TAU_EXE\`"; fi
     if command -v cargo &>/dev/null; then echo "- **Rust:** $(rustc --version 2>/dev/null)"; fi
     echo ""

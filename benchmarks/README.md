@@ -32,9 +32,13 @@ default 50) and `BENCH_DUR` (seconds per endpoint, default 8). A framework whose
 toolchain is missing (`cargo`, `fastapi`/`uvicorn`) is **skipped**, not failed,
 so the suite always runs watax-only on a minimal machine.
 
-The runner builds each server, drives it with `loadtest.py` (a dependency-free
-keep-alive load generator), and records **req/sec, average latency, error count,
-and peak resident memory**. Results are written to [`results.md`](results.md).
+The runner builds each server, drives it with [`wrk`](https://github.com/wg/wrk)
+(a fast, accurate HTTP benchmarking tool — installed by CI), and records
+**req/sec, average latency, error count, and peak resident memory**. When `wrk`
+isn't available (e.g. on Windows) it falls back to the bundled, dependency-free
+`loadtest.py`. Results are written to [`results.md`](results.md).
+
+Extra knob: `BENCH_THREADS` (wrk worker threads, default 4).
 
 ## Why memory is the headline
 
