@@ -193,5 +193,7 @@ jobs:
             echo "No benchmark changes to commit."
           else
             git commit -m "ci: update watax benchmark results [skip ci]"
-            git push
+            git fetch origin main
+            git rebase origin/main
+            git push origin main
           fi
