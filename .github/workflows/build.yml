@@ -54,10 +54,19 @@ jobs:
           echo "taupkg: $TAUPKG"
 
           # 2. Install the latest tauraroc (downloads from tauraro/tauraro).
-          #    install-tauraro succeeds but returns non-zero on Linux/macOS (it
-          #    edits ~/.profile/.bashrc), so tolerate the exit code and verify by
-          #    locating the binary instead.
-          "$TAUPKG" install-tauraro --verbose || true
+          #    Resolve the version with the AUTHENTICATED gh CLI and pass it via
+          #    --version, so install-tauraro skips its own unauthenticated
+          #    api.github.com call (that gets HTTP 403 / rate-limited on shared
+          #    runner IPs, esp. macOS). install-tauraro returns non-zero on
+          #    Linux/macOS even on success (it edits ~/.profile), so tolerate the
+          #    exit code and verify by locating the binary instead.
+          VER=$(gh release view --repo tauraro/tauraro --json tagName -q '.tagName' 2>/dev/null | sed 's/^v//')
+          echo "Installing tauraroc ${VER:-latest}"
+          if [ -n "$VER" ]; then
+            "$TAUPKG" install-tauraro --version "$VER" --verbose || true
+          else
+            "$TAUPKG" install-tauraro --verbose || true
+          fi
 
           # 3. Locate the freshly installed tauraroc and export its path so the
           #    build step (and any later step) uses it without PATH juggling.
@@ -138,7 +147,14 @@ jobs:
             --pattern "taupkg-linux-x64.zip" --dir taupkg-dl --clobber
           mkdir -p taupkg-bin && unzip -oq "taupkg-dl/taupkg-linux-x64.zip" -d taupkg-bin
           TAUPKG=$(find taupkg-bin -name "taupkg" -type f | head -1); chmod +x "$TAUPKG"
-          "$TAUPKG" install-tauraro --verbose || true     # exits non-zero on Linux despite success
+          # Resolve the version via authenticated gh (avoids install-tauraro's
+          # rate-limited unauthenticated api.github.com call) and pass --version.
+          VER=$(gh release view --repo tauraro/tauraro --json tagName -q '.tagName' 2>/dev/null | sed 's/^v//')
+          if [ -n "$VER" ]; then
+            "$TAUPKG" install-tauraro --version "$VER" --verbose || true
+          else
+            "$TAUPKG" install-tauraro --verbose || true
+          fi
           TAURAROC=$(find "$HOME/.taupkg/bin" -name "tauraroc" -type f 2>/dev/null | head -1)
           [ -z "$TAURAROC" ] && { echo "error: tauraroc not found"; exit 1; }
           echo "TAURAROC=$TAURAROC" >> "$GITHUB_ENV"
