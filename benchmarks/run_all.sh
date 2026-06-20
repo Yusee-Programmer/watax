@@ -5,9 +5,22 @@
 # headline metric after the auto-drop / leak work — watax should stay flat).
 #
 # Comparable endpoints (identical semantics in all three apps):
-#   GET /            plain text
-#   GET /json        small JSON object
-#   GET /greet/:name JSON built from a path parameter
+#   GET /                   plain text
+#   GET /json               small JSON object
+#   GET /greet/:name        JSON built from a path parameter
+#   GET /users              larger JSON payload (20-element array of objects)
+#   GET /db                 TechEmpower single query   (1 in-memory "World" row)
+#   GET /queries?queries=N  TechEmpower multiple queries (N rows, 1..500)
+#   GET /updates?queries=N  TechEmpower updates (N rows read + written back)
+#   GET /fortunes           TechEmpower fortunes (HTML table, escaped, +1 row)
+#   GET /plaintext-big      ~11 KB plain text (large response)
+# (watax also serves a WebSocket echo at /ws — not in the wrk table since wrk
+#  speaks HTTP, not WebSocket.) The TechEmpower-style endpoints use IN-MEMORY
+# data, not a real database, so they measure framework overhead (routing, query
+# parsing, JSON serialization, HTML templating) — not DB latency.
+#
+# Reports throughput (req/s), avg + p50 + p99 latency, Transfer/sec, errors,
+# peak RSS, and a memory-efficiency score (req/s per MB of peak RSS).
 #
 # A framework is skipped (not failed) when its toolchain is absent, so the
 # suite still runs watax-only on minimal machines. Writes a Markdown report to
@@ -43,34 +56,47 @@ GRN='\033[0;32m'; YLW='\033[0;33m'; CYN='\033[0;36m'; RST='\033[0m'
 # Peak RSS (kB) of a pid, from /proc VmHWM (Linux high-water mark; persists).
 peak_rss_kb() { awk '/^VmHWM/{print $2}' "/proc/$1/status" 2>/dev/null; }
 
-# Run a load test against $1; echo "rps|errors|latency_ms" (empty on failure).
+# Run a load test against $1; echo "rps|errors|avg_ms|p50_ms|p99_ms|transfer_mb"
+# (fields that the load generator can't supply are "-"). p50/p99 tail latency and
+# Transfer/sec are the metrics devs scrutinise beyond raw throughput.
 runload() {
     if [ -n "$WRK" ]; then
-        # wrk --latency reports Requests/sec, the avg Latency (with a unit),
-        # plus socket errors and non-2xx counts. Normalize latency to ms.
+        # wrk --latency reports Requests/sec, avg Latency, the latency
+        # distribution (50/75/90/99%), Transfer/sec, socket errors and non-2xx
+        # counts. Normalize every latency to ms and transfer to MB.
         "$WRK" -t"$THREADS" -c"$CONC" -d"${DUR}s" --latency "$1" 2>/dev/null | awk '
+            function ms(v) {
+                if      (v ~ /us$/) { sub(/us/,"",v); return v/1000 }
+                else if (v ~ /ms$/) { sub(/ms/,"",v); return v+0 }
+                else if (v ~ /s$/)  { sub(/s/,"",v);  return v*1000 }
+                else                { return v+0 }
+            }
+            function mb(v) {
+                if      (v ~ /GB$/) { sub(/GB/,"",v); return v*1024 }
+                else if (v ~ /MB$/) { sub(/MB/,"",v); return v+0 }
+                else if (v ~ /KB$/) { sub(/KB/,"",v); return v/1024 }
+                else if (v ~ /B$/)  { sub(/B/,"",v);  return v/1048576 }
+                else                { return v+0 }
+            }
             /Requests\/sec/ { rps=$2 }
+            /Transfer\/sec/ { xfer=mb($2) }
             # Thread-Stats avg latency line: "Latency  2.10ms ..." (digit after
             # Latency) — not the "Latency Distribution" header that --latency adds.
-            /^[[:space:]]*Latency[[:space:]]+[0-9]/ {
-                v=$2
-                if      (v ~ /us$/) { sub(/us/,"",v); lat=v/1000 }
-                else if (v ~ /ms$/) { sub(/ms/,"",v); lat=v }
-                else if (v ~ /s$/)  { sub(/s/,"",v);  lat=v*1000 }
-                else                { lat=v }
-            }
+            /^[[:space:]]*Latency[[:space:]]+[0-9]/ { lat=ms($2) }
+            /^[[:space:]]*50%/ { p50=ms($2) }
+            /^[[:space:]]*99%/ { p99=ms($2) }
             /Non-2xx or 3xx responses/ { n2=$NF }
             /Socket errors/ { to=$NF }   # timeout count is the last field
             END {
                 e=(n2=="" ? 0 : n2) + (to=="" ? 0 : to)
-                printf "%s|%d|%.3f", rps, e, lat
+                printf "%s|%d|%.3f|%.3f|%.3f|%.2f", rps, e, lat, p50, p99, xfer
             }'
     else
         "$PY" "$LOADTEST" "$1" "$CONC" "$DUR" 2>/dev/null | awk -F: '
             /Req\/sec/      {gsub(/ /,"",$2); rps=$2}
             /Errors/        {gsub(/ /,"",$2); err=$2}
             /Avg latency/   {gsub(/ms/,"",$2); gsub(/ /,"",$2); lat=$2}
-            END {print rps"|"err"|"lat}'
+            END {print rps"|"err"|"lat"|-|-|-"}'
     fi
 }
 
@@ -78,7 +104,17 @@ declare -a ROWS=()   # "framework|endpoint|rps|errors|latency|peakKB"
 
 # bench_framework <name> <port> <pidvar-already-started>
 # Endpoints are fixed; caller has already started the server as $SERVER_PID.
-ENDPOINTS=("/|plaintext" "/json|json" "/greet/tauraro|route-param")
+ENDPOINTS=(
+    "/|plaintext"
+    "/json|json"
+    "/greet/tauraro|route-param"
+    "/users|users-json"
+    "/db|db (1 row)"
+    "/queries?queries=20|queries (20 rows)"
+    "/updates?queries=20|updates (20 rows)"
+    "/fortunes|fortunes (html)"
+    "/plaintext-big|plaintext-big (~11KB)"
+)
 
 bench_framework() {
     local name="$1" port="$2" pid="$3"
@@ -97,10 +133,16 @@ PYEOF
     for ep in "${ENDPOINTS[@]}"; do
         local path="${ep%%|*}" label="${ep##*|}"
         printf "  %-8s %-12s ... " "$name" "$label"
-        IFS='|' read -r rps err lat <<< "$(runload "http://127.0.0.1:$port$path")"
+        IFS='|' read -r rps err lat p50 p99 xfer <<< "$(runload "http://127.0.0.1:$port$path")"
         local peak; peak="$(peak_rss_kb "$pid")"
-        ROWS+=("$name|$label|${rps:-FAIL}|${err:-?}|${lat:-?}|${peak:-?}")
-        printf "%s req/s, %s ms, %s err, %s KB peak\n" "${rps:-FAIL}" "${lat:-?}" "${err:-0}" "${peak:-?}"
+        # Memory efficiency: requests/sec served per MB of peak RSS — watax's
+        # headline strength. Computed here so it lands in the report verbatim.
+        local eff="-"
+        if [ -n "$rps" ] && [ -n "$peak" ] && [ "$peak" != "?" ] && [ "$peak" -gt 0 ] 2>/dev/null; then
+            eff="$(awk -v r="$rps" -v p="$peak" 'BEGIN{ printf "%.0f", r/(p/1024) }')"
+        fi
+        ROWS+=("$name|$label|${rps:-FAIL}|${err:-?}|${lat:-?}|${p50:--}|${p99:--}|${xfer:--}|${peak:-?}|${eff:--}")
+        printf "%s req/s, p99 %s ms, %s err, %s KB peak\n" "${rps:-FAIL}" "${p99:-?}" "${err:-0}" "${peak:-?}"
     done
 }
 
@@ -121,7 +163,7 @@ if [ -n "$TAU_EXE" ] && [ -x "$TAU_EXE" ] || command -v "$TAU_EXE" &>/dev/null; 
     # modules (src/) and the templa dependency (.taupkg/packages/).
     ( cd "$WATAX_ROOT" \
       && TAURARO_PATH="$WATAX_ROOT/.taupkg/packages:$WATAX_ROOT/src" \
-         "$TAU_EXE" benchmarks/watax_app/src/main.tr -o "$BENCH/watax_app/server" >/tmp/watax_build.log 2>&1 )
+         "$TAU_EXE" -O3 benchmarks/watax_app/src/main.tr -o "$BENCH/watax_app/server" >/tmp/watax_build.log 2>&1 )
     WX="$BENCH/watax_app/server"; [ -x "$WX" ] || WX="$BENCH/watax_app/server.exe"
     if [ -x "$WX" ]; then
         "$WX" & SERVER_PID=$!
@@ -187,16 +229,39 @@ fi
     echo ""
     echo "## Throughput, latency & memory"
     echo ""
-    echo "| Framework | Endpoint | Req/sec | Avg latency (ms) | Errors | Peak RSS (KB) |"
-    echo "|-----------|----------|--------:|-----------------:|-------:|--------------:|"
+    echo "Latency columns: **Avg** is the mean, **p50** the median, **p99** the"
+    echo "99th-percentile tail (the metric that matters for real SLAs). **Transfer/sec**"
+    echo "is wire throughput. **Req/s per MB** is requests/sec served per MB of peak"
+    echo "RSS — a memory-efficiency score where higher is better."
+    echo ""
+    echo "| Framework | Endpoint | Req/sec | Avg (ms) | p50 (ms) | p99 (ms) | Transfer/sec (MB) | Errors | Peak RSS (KB) | Req/s per MB |"
+    echo "|-----------|----------|--------:|---------:|---------:|---------:|------------------:|-------:|--------------:|-------------:|"
     for r in "${ROWS[@]}"; do
-        IFS='|' read -r fw ep rps err lat peak <<< "$r"
-        echo "| $fw | $ep | $rps | $lat | $err | $peak |"
+        IFS='|' read -r fw ep rps err lat p50 p99 xfer peak eff <<< "$r"
+        echo "| $fw | $ep | $rps | $lat | $p50 | $p99 | $xfer | $err | $peak | $eff |"
     done
     echo ""
-    echo "_watax frees all per-request memory inside the framework (auto-drop +"
-    echo "owning response APIs), so its peak RSS stays flat under sustained load —"
-    echo "user handlers never call free/dispose._"
+    echo "### Concurrency model"
+    echo ""
+    echo "watax serves with **green threads** (\`listen_async\`): a small pool of OS"
+    echo "worker threads each run a cooperative scheduler + readiness reactor, and"
+    echo "every connection is handled on its own lightweight coroutine doing"
+    echo "non-blocking I/O — concurrency without a thread per request, the same model"
+    echo "as axum/tokio. Request headers are parsed lazily (scanned on demand) and all"
+    echo "per-request memory is freed inside the framework (auto-drop + owning response"
+    echo "APIs), so peak RSS stays flat under sustained load — user handlers never call"
+    echo "free/dispose."
+    echo ""
+    echo "### Test types"
+    echo ""
+    echo "Beyond plaintext/JSON, the suite includes TechEmpower-style endpoints:"
+    echo "**db** (single row), **queries** (N rows), **updates** (N rows read +"
+    echo "written), and **fortunes** (HTML table with per-row escaping). These use an"
+    echo "**in-memory** \`World\`/\`Fortune\` store — there is no real database, so they"
+    echo "measure framework overhead (routing, query-string parsing, JSON"
+    echo "serialization, HTML templating), not DB latency. watax additionally serves a"
+    echo "WebSocket echo at \`/ws\` (RFC 6455), which isn't in the table above because"
+    echo "\`wrk\` benchmarks HTTP, not WebSocket. The watax app is built with \`-O3\`."
 } > "$RESULTS_MD"
 
 printf "\n${GRN}Wrote Markdown report: %s${RST}\n\n" "$RESULTS_MD"

@@ -1,17 +1,70 @@
-# Minimal watax benchmark server — compared against Rust (axum/hyper) and
-# Python (FastAPI). Comparable endpoints across all three frameworks:
-#   GET /            -> plain text          ("Hello, World!")
-#   GET /json        -> JSON object         ({"message","id","ok"})
-#   GET /greet/:name -> JSON with a path param ({"hello": <name>})
+# watax benchmark server — compared against Rust (axum/hyper) and Python
+# (FastAPI). Comparable endpoints across all three frameworks.
 #
-# Memory note: this handler frees NOTHING. `send_json_value` takes ownership of
-# the JsonValue and frees the whole tree + the serialized body internally, and
-# `send_text` bodies are released by the framework. No manual memory management
-# in user code — that is the whole point of the auto-drop work.
+# Core endpoints:
+#   GET /            -> plain text   ("Hello, World!")
+#   GET /json        -> small JSON object
+#   GET /greet/:name -> JSON with a path param
+#   GET /users       -> 20-element JSON array (larger payload)
+#
+# TechEmpower-style endpoints (in-memory "World"/"Fortune" tables — there is no
+# real database, so these measure FRAMEWORK overhead: routing, query-string
+# parsing, JSON serialization, and HTML templating/escaping — not DB latency):
+#   GET /db                 -> one random row            {"id","randomNumber"}
+#   GET /queries?queries=N  -> N random rows (1..500)    [ ...rows ]
+#   GET /updates?queries=N  -> N rows read + updated     [ ...rows ]
+#   GET /fortunes           -> HTML table, one row added at request time, escaped
+#   GET /plaintext-big      -> ~8 KB plain text (large response)
+#
+# Memory note: handlers free NOTHING. send_json_value takes ownership of the
+# JsonValue tree and frees it; send_text/send_html bodies are freed by the
+# framework. No manual memory management in user code.
 
-from watax import App
+from watax import App, html_escape, WsConn
 from std.net.http_server import HttpConn
 from std.encoding.json import JsonValue
+from std.string.str import Str
+from std.math.random import Random
+from core.vec import Vec
+
+# ── In-memory data ────────────────────────────────────────────────────────────
+
+mut WORLDS:   Vec[int] = Vec[int].init(10000)   # id i (1..10000) -> randomNumber
+mut FORTUNES: Vec[str] = Vec[str].init(16)
+mut RNG:      Random   = Random.new(20260620)
+
+def seed():
+    mut i = 0
+    while i < 10000:
+        WORLDS.push(RNG.randint(1, 10000))
+        i = i + 1
+    FORTUNES.push("fortune: No such file or directory")
+    FORTUNES.push("A computer scientist is someone who fixes things that aren't broken.")
+    FORTUNES.push("After enough decimal places, nobody gives a damn.")
+    FORTUNES.push("A bad random number generator: 1, 1, 1, 1, 1, 4.33e+67, 1, 1, 1")
+    FORTUNES.push("A computer program does what you tell it to do, not what you want it to do.")
+    FORTUNES.push("Emacs is a nice operating system, but I prefer UNIX. - Tom Christiansen")
+    FORTUNES.push("Any program that runs right is obsolete.")
+    FORTUNES.push("A list is only as strong as its weakest link. - Donald Knuth")
+    FORTUNES.push("Feature: A bug with seniority.")
+    FORTUNES.push("Computers make very fast, very accurate mistakes.")
+    FORTUNES.push("<script>alert(\"This should not be displayed in a browser alert box.\");</script>")
+    FORTUNES.push("フレームワークのベンチマーク")
+
+# Clamp the ?queries=N parameter to TechEmpower's 1..500 range.
+def query_count(c: HttpConn) -> int:
+    mut q = Str.parse_int(c.request.query_param("queries"))
+    if q < 1: q = 1
+    if q > 500: q = 500
+    return q
+
+def world_obj(id: int) -> Pointer[JsonValue]:
+    mut o = JsonValue.init_object()
+    o.read().obj_set("id", JsonValue.init_int(id))
+    o.read().obj_set("randomNumber", JsonValue.init_int(WORLDS.get(id - 1)))
+    return o
+
+# ── Handlers ──────────────────────────────────────────────────────────────────
 
 def root(c: HttpConn):
     c.send_text(200, "Hello, World!")
@@ -29,13 +82,93 @@ def greet(c: HttpConn):
     o.read().obj_set("hello", JsonValue.init_str(name))
     c.send_json_value(200, o)
 
+def users(c: HttpConn):
+    mut arr = JsonValue.init_array()
+    mut i = 0
+    while i < 20:
+        mut o = JsonValue.init_object()
+        o.read().obj_set("id", JsonValue.init_int(i))
+        o.read().obj_set("name", JsonValue.init_str("user"))
+        o.read().obj_set("active", JsonValue.init_bool(true))
+        arr.read().push(o)
+        i = i + 1
+    c.send_json_value(200, arr)
+
+# TechEmpower: single database query.
+def db(c: HttpConn):
+    c.send_json_value(200, world_obj(RNG.randint(1, 10000)))
+
+# TechEmpower: multiple database queries (?queries=N).
+def queries(c: HttpConn):
+    mut n = query_count(c)
+    mut arr = JsonValue.init_array()
+    mut i = 0
+    while i < n:
+        arr.read().push(world_obj(RNG.randint(1, 10000)))
+        i = i + 1
+    c.send_json_value(200, arr)
+
+# TechEmpower: database updates (?queries=N) — read N rows, assign new values.
+def updates(c: HttpConn):
+    mut n = query_count(c)
+    mut arr = JsonValue.init_array()
+    mut i = 0
+    while i < n:
+        mut id = RNG.randint(1, 10000)
+        WORLDS.set(id - 1, RNG.randint(1, 10000))
+        arr.read().push(world_obj(id))
+        i = i + 1
+    c.send_json_value(200, arr)
+
+# TechEmpower: fortunes — render an HTML table, with one fortune added at request
+# time, every message HTML-escaped (exercises templating + escaping).
+def fortunes(c: HttpConn):
+    mut html = "<!DOCTYPE html><html><head><title>Fortunes</title></head><body><table><tr><th>id</th><th>message</th></tr>"
+    mut i = 0
+    while i < FORTUNES.len:
+        html = html + "<tr><td>" + (i + 1).to_str() + "</td><td>" + html_escape(FORTUNES.get(i)) + "</td></tr>"
+        i = i + 1
+    html = html + "<tr><td>0</td><td>" + html_escape("Additional fortune added at request time.") + "</td></tr>"
+    html = html + "</table></body></html>"
+    c.send_html(200, html)
+
+# WebSocket echo (RFC 6455). Not part of the wrk throughput table (wrk speaks
+# HTTP, not WebSocket), but demonstrates watax's WebSocket support: upgrade the
+# connection, then echo every text frame until the peer closes.
+def ws_echo(c: HttpConn):
+    mut ws = c.upgrade_websocket()
+    while ws.is_open():
+        mut msg = ws.recv_text()
+        if Str.len(msg) == 0:
+            break
+        ws.send_text(msg)
+    ws.send_close()
+
+# Large plain-text response (~8 KB): stresses the write path.
+def plaintext_big(c: HttpConn):
+    mut s = ""
+    mut i = 0
+    while i < 256:
+        s = s + "The quick brown fox jumps over the lazy dog. "
+        i = i + 1
+    c.send_text(200, s)
+
+# ── Wiring ────────────────────────────────────────────────────────────────────
+
 def main():
+    seed()
     mut app = App.new()
         .get("/", root)
         .get("/json", json_endpoint)
         .get("/greet/:name", greet)
+        .get("/users", users)
+        .get("/db", db)
+        .get("/queries", queries)
+        .get("/updates", updates)
+        .get("/fortunes", fortunes)
+        .get("/plaintext-big", plaintext_big)
+        .get("/ws", ws_echo)
     # Green-thread server: 4 OS worker threads, each running a cooperative
     # scheduler + reactor; every connection is handled on its own lightweight
-    # green thread (Coro) doing non-blocking async I/O. This is the apples-to-
-    # apples model against axum/tokio — concurrency without a thread per request.
+    # green thread (Coro) doing non-blocking async I/O.
     app.listen_async("127.0.0.1", 8200, 4)

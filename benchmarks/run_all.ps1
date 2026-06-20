@@ -24,9 +24,15 @@ if (-not $TAU) {
 }
 
 $endpoints = @(
-    @{ path = "/";              label = "plaintext"   },
-    @{ path = "/json";          label = "json"        },
-    @{ path = "/greet/tauraro"; label = "route-param" }
+    @{ path = "/";                     label = "plaintext"            },
+    @{ path = "/json";                 label = "json"                 },
+    @{ path = "/greet/tauraro";        label = "route-param"          },
+    @{ path = "/users";                label = "users-json"           },
+    @{ path = "/db";                   label = "db (1 row)"           },
+    @{ path = "/queries?queries=20";   label = "queries (20 rows)"    },
+    @{ path = "/updates?queries=20";   label = "updates (20 rows)"    },
+    @{ path = "/fortunes";             label = "fortunes (html)"      },
+    @{ path = "/plaintext-big";        label = "plaintext-big (~11KB)"}
 )
 
 $rows = New-Object System.Collections.Generic.List[object]
@@ -72,7 +78,7 @@ if ($TAU -and (Test-Path $TAU)) {
     $rootFwd = $WATAX_ROOT -replace '\\','/'
     $env:TAURARO_PATH = "$rootFwd/.taupkg/packages;$rootFwd/src"
     Push-Location $WATAX_ROOT
-    & $TAU "benchmarks/watax_app/src/main.tr" -o "$BENCH\watax_app\server.exe" 2>&1 | Out-File "$env:TEMP\watax_build.log"
+    & $TAU -O3 "benchmarks/watax_app/src/main.tr" -o "$BENCH\watax_app\server.exe" 2>&1 | Out-File "$env:TEMP\watax_build.log"
     Pop-Location
     $wx = "$BENCH\watax_app\server.exe"
     if (Test-Path $wx) {

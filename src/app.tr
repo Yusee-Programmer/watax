@@ -232,13 +232,14 @@ extend App:
             App._dispatch(self, conn)
             if conn._closed or not conn.request.keep_alive():
                 break
-            mut prev_req = conn.request
-            mut next_req = self._server.read_next(conn._stream)
-            if Str.len(next_req.method) == 0:
-                next_req.free_owned()
+            # Reuse conn.request in place for the next request on this connection
+            # (read_next_into resets + re-parses it) instead of allocating a fresh
+            # HttpRequest and freeing the old one each time -- saves the request
+            # struct + its two map structs per keep-alive request. The request is
+            # freed once at the end via conn.dispose()/free_owned().
+            conn._reset_for_next()
+            if not self._server.read_next_into(conn._stream, conn.request):
                 break
-            conn.reset_for(next_req)
-            prev_req.free_owned()
         conn.close()
 
     pub def _dispatch(self, conn: HttpConn):
