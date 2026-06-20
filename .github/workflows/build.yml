@@ -93,6 +93,7 @@ jobs:
           if-no-files-found: error
           path: |
             src/
+            docs/
             example/
             benchmarks/
             public/
