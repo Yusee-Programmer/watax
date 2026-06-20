@@ -1,8 +1,0 @@
-# taupkg lock file -- do not edit manually
-
-[[pkg]]
-name     = "templa"
-version  = "0.1.0"
-source   = "local:C:\\Users\\Yusee Habibu\\tauProject\\templa"
-checksum = "sha256:95546c385a8bdca4d1ad1e8a718d45b2c331ab8d000448d7447eb8b396c25c02"
-
