@@ -65,9 +65,14 @@ Write-Host ""
 # ── watax ──────────────────────────────────────────────────────────────────────
 if ($TAU -and (Test-Path $TAU)) {
     Write-Host "Building watax_app..." -ForegroundColor Yellow
-    $env:TAURARO_PATH = "$WATAX_ROOT\.taupkg\packages;$WATAX_ROOT\src"
-    Push-Location "$BENCH\watax_app"
-    & $TAU "src\main.tr" -o "$BENCH\watax_app\server.exe" 2>&1 | Out-File "$env:TEMP\watax_build.log"
+    # Build from the watax ROOT so `from watax import ...` resolves the framework
+    # modules under src/ and the templa dep under .taupkg/packages (matching how
+    # watax itself is built). Use forward slashes — the resolver normalizes them
+    # and they avoid backslash-escaping surprises in search-path matching.
+    $rootFwd = $WATAX_ROOT -replace '\\','/'
+    $env:TAURARO_PATH = "$rootFwd/.taupkg/packages;$rootFwd/src"
+    Push-Location $WATAX_ROOT
+    & $TAU "benchmarks/watax_app/src/main.tr" -o "$BENCH\watax_app\server.exe" 2>&1 | Out-File "$env:TEMP\watax_build.log"
     Pop-Location
     $wx = "$BENCH\watax_app\server.exe"
     if (Test-Path $wx) {
@@ -94,9 +99,10 @@ $hasFast = $false
 try { & $PY -c "import fastapi, uvicorn" 2>$null; $hasFast = ($LASTEXITCODE -eq 0) } catch {}
 if ($hasFast) {
     Write-Host "Starting FastAPI (uvicorn)..." -ForegroundColor Yellow
-    Push-Location "$BENCH\fastapi_app"
-    $proc = Start-Process -FilePath $PY -ArgumentList "-m","uvicorn","main:app","--host","127.0.0.1","--port","8400","--no-access-log","--log-level","warning" -PassThru -WindowStyle Hidden
-    Pop-Location
+    $proc = Start-Process -FilePath $PY -WorkingDirectory "$BENCH\fastapi_app" `
+        -ArgumentList "-m","uvicorn","main:app","--host","127.0.0.1","--port","8400","--no-access-log","--log-level","warning" `
+        -PassThru -WindowStyle Hidden
+    Start-Sleep -Seconds 3   # uvicorn boots slower than the native servers
     Bench-Framework "fastapi" 8400 $proc
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 } else { Write-Host "fastapi/uvicorn not installed - skipping FastAPI" -ForegroundColor Yellow }
