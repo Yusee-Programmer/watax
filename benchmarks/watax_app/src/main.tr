@@ -1,0 +1,37 @@
+# Minimal watax benchmark server — compared against Rust (axum/hyper) and
+# Python (FastAPI). Comparable endpoints across all three frameworks:
+#   GET /            -> plain text          ("Hello, World!")
+#   GET /json        -> JSON object         ({"message","id","ok"})
+#   GET /greet/:name -> JSON with a path param ({"hello": <name>})
+#
+# Memory note: this handler frees NOTHING. `send_json_value` takes ownership of
+# the JsonValue and frees the whole tree + the serialized body internally, and
+# `send_text` bodies are released by the framework. No manual memory management
+# in user code — that is the whole point of the auto-drop work.
+
+from watax import App
+from std.net.http_server import HttpConn
+from std.encoding.json import JsonValue
+
+def root(c: HttpConn):
+    c.send_text(200, "Hello, World!")
+
+def json_endpoint(c: HttpConn):
+    mut o = JsonValue.init_object()
+    o.read().obj_set("message", JsonValue.init_str("Hello, World!"))
+    o.read().obj_set("id", JsonValue.init_int(1))
+    o.read().obj_set("ok", JsonValue.init_bool(true))
+    c.send_json_value(200, o)
+
+def greet(c: HttpConn):
+    mut name = c.request.get_param("name")
+    mut o = JsonValue.init_object()
+    o.read().obj_set("hello", JsonValue.init_str(name))
+    c.send_json_value(200, o)
+
+def main():
+    mut app = App.new()
+    app = app.get("/", root)
+    app = app.get("/json", json_endpoint)
+    app = app.get("/greet/:name", greet)
+    app.listen_reactor_pool("127.0.0.1", 8200, 4)
