@@ -13,7 +13,7 @@
 
 ## Quick start
 
-```tauraro
+```python
 from watax import App
 from std.net.http_server import HttpConn
 from std.encoding.json import JsonValue

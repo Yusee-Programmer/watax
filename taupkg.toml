@@ -1,9 +1,11 @@
 [package]
 name    = "watax"
 version = "0.1.0"
-desc    = ""
+desc    = "A fast, ergonomic web framework for Tauraro."
 license = "MIT"
 bin     = "src/main.tr"
 
 [deps]
-templa = "local:C:\\Users\\Yusee Habibu\\tauProject\\templa"
+# templa is fetched from GitHub (cloned into .taupkg/packages/templa by
+# `taupkg install`). Use a `@tag` suffix to pin a release once templa cuts one.
+templa = "github:Yusee-Programmer/templa"
