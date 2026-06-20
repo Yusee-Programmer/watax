@@ -184,16 +184,5 @@ jobs:
           echo "===== benchmarks/results.md ====="
           cat benchmarks/results.md || echo "no results.md produced"
 
-      - name: Commit results.md
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add benchmarks/results.md
-          if git diff --cached --quiet; then
-            echo "No benchmark changes to commit."
-          else
-            git commit -m "ci: update watax benchmark results [skip ci]"
-            git fetch origin main
-            git rebase origin/main
-            git push origin main
-          fi
+      - name: Commit and push results.md
+        run: bash scripts/push-benchmark-results.sh
