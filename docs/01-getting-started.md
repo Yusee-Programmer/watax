@@ -52,18 +52,19 @@ Open <http://127.0.0.1:8080/>.
 ```tauraro
 def main():
     mut app = App.new()              # 1. create
-    app = app.use(logger)            # 2. add middleware (optional)
-    app = app.static_dir("/static", "./public")   # 3. static mounts (optional)
-    app = app.get("/", home)         # 4. register routes
-    app = app.post("/users", create_user)
-    app = app.on_error(not_found)    # 5. error handler (optional)
+        .use(logger)                 # 2. add middleware (optional)
+        .static_dir("/static", "./public")   # 3. static mounts (optional)
+        .get("/", home)              # 4. register routes
+        .post("/users", create_user)
+        .on_error(not_found)         # 5. error handler (optional)
     app.listen_reactor_pool("127.0.0.1", 8080, 4)   # 6. serve
 ```
 
-> **Why the reassignment?** Each builder method returns the app, but the parser
-> doesn't yet support multi-line method chaining, so write
-> `app = app.get(...)` rather than `app.get(...).post(...)`. It's the same
-> object; the reassignment is free.
+> **Fluent builder.** Each method returns the app, so calls **chain across
+> lines** — indent the `.method(...)` continuations under `App.new()`
+> (leading-dot, as above) or end each line with a `.` (trailing-dot). The
+> chain is the same object; no per-call reassignment needed. (You *can* still
+> write `app = app.get(...)` line-by-line if you prefer.)
 
 ### When to use what
 

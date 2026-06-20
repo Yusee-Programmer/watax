@@ -31,7 +31,7 @@ def greet(c: HttpConn):
 
 def main():
     mut app = App.new()
-    app = app.get("/", root)
-    app = app.get("/json", json_endpoint)
-    app = app.get("/greet/:name", greet)
+        .get("/", root)
+        .get("/json", json_endpoint)
+        .get("/greet/:name", greet)
     app.listen_reactor_pool("127.0.0.1", 8200, 4)

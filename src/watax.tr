@@ -11,12 +11,14 @@
 #
 #   def main():
 #       mut app = App.new()
-#       app = app.get("/", home)
-#       app = app.get("/users/:id", show_user)
+#           .get("/", home)
+#           .get("/users/:id", show_user)
 #       app.listen("0.0.0.0", 8080)
 #
-# (Multi-line method-chaining without intermediate bindings is not yet
-# supported by the parser, so each `.method(...)` call is reassigned.)
+# Builder calls chain fluently across lines (leading- or trailing-dot style):
+#       mut app = App.new()
+#           .get("/", home)
+#           .post("/echo", echo)
 #
 # A handler is a `def(HttpConn) -> void` — a zero-cost function pointer. The
 # HttpConn carries the parsed request (`c.request`) and the response helpers

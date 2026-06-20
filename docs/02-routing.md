@@ -16,7 +16,8 @@ app = app.delete("/posts/:id", delete_post)
 app = app.route("OPTIONS", "/posts", preflight)
 ```
 
-Each returns the app, so reassign: `app = app.get(...)`.
+Each returns the app, so they **chain** — `App.new().get(...).post(...)` on one
+line, or indented `.get(...)` continuations across lines.
 
 ## Path parameters
 

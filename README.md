@@ -29,8 +29,8 @@ def greet(c: HttpConn):
 
 def main():
     mut app = App.new()
-    app = app.get("/", root)
-    app = app.get("/greet/:name", greet)
+        .get("/", root)
+        .get("/greet/:name", greet)
     app.listen_reactor_pool("127.0.0.1", 8080, 4)
 ```
 
@@ -38,8 +38,9 @@ def main():
 taupkg build && ./watax          # or: tauraroc src/main.tr -o watax && ./watax
 ```
 
-> Method-chaining across lines isn't supported by the parser yet, so reassign
-> the app on each builder call: `app = app.get(...)`.
+> Builder calls **chain fluently** across lines (indented `.get(...)` / `.post(...)`
+> lines, leading- or trailing-dot). Prefer one binding + a chain over reassigning
+> `app` on every call.
 
 ## Features
 
