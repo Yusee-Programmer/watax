@@ -34,4 +34,8 @@ def main():
         .get("/", root)
         .get("/json", json_endpoint)
         .get("/greet/:name", greet)
-    app.listen_reactor_pool("127.0.0.1", 8200, 4)
+    # Green-thread server: 4 OS worker threads, each running a cooperative
+    # scheduler + reactor; every connection is handled on its own lightweight
+    # green thread (Coro) doing non-blocking async I/O. This is the apples-to-
+    # apples model against axum/tokio — concurrency without a thread per request.
+    app.listen_async("127.0.0.1", 8200, 4)

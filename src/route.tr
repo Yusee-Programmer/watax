@@ -78,7 +78,16 @@ extend Route:
 
             mut pseg_len = pend - pstart
             if pseg_len > 0 and Str.char_at(pat, pstart) == 58:   # ':' param
-                req.params.insert(Str.slice(pat, pstart + 1, pend), Str.slice(path, rstart, rend))
+                # Bind both the key and value slices to locals so the compiler
+                # auto-drops them after the insert. Passing a fresh Str.slice()
+                # INLINE as the key leaks it: the dict copies the key's char*
+                # but the temporary TrStr wrapper (struct + .data) is never
+                # released (the inline-key codegen has no hoist+release, unlike
+                # the value position). That orphaned slice per matched request
+                # is the route-param memory leak.
+                mut pname = Str.slice(pat, pstart + 1, pend)
+                mut pval  = Str.slice(path, rstart, rend)
+                req.params.insert(pname, pval)
             else:
                 mut rseg_len = rend - rstart
                 if pseg_len != rseg_len: return false
