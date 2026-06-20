@@ -128,8 +128,11 @@ if [ -n "$TAU_EXE" ] && [ -x "$TAU_EXE" ] || command -v "$TAU_EXE" &>/dev/null; 
         bench_framework watax 8200 "$SERVER_PID" || true
         kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null
     else
-        printf "${YLW}  watax build failed (see /tmp/watax_build.log) — skipping${RST}\n"
-        tail -5 /tmp/watax_build.log 2>/dev/null
+        printf "${YLW}  watax build FAILED — diagnostics:${RST}\n"
+        # Show the actual compiler/gcc errors so failures are diagnosable in CI.
+        grep -nE "error:|undeclared|undefined reference|^build/" /tmp/watax_build.log 2>/dev/null | head -30
+        echo "  --- last 20 lines of build log ---"
+        tail -20 /tmp/watax_build.log 2>/dev/null
     fi
 else
     printf "${YLW}tauraroc not found — skipping watax${RST}\n"
