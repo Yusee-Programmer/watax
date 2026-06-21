@@ -42,11 +42,20 @@ taupkg build && ./watax          # or: tauraroc src/main.tr -o watax && ./watax
 > lines, leading- or trailing-dot). Prefer one binding + a chain over reassigning
 > `app` on every call.
 
+## Example app
+
+[`example/app`](example/app) is **watax-notes**, a small modular reference app that
+exercises nearly the whole framework in one place — templates, static files, form
+CRUD, a full JSON REST API (with `JsonWriter`), cookies, search, CORS,
+rate limiting, chunked CSV, Server-Sent Events, and a WebSocket — with a live
+browser demo of the streaming endpoints.
+
 ## Features
 
 - **Routing** with path params (`/users/:id`), wildcards, route groups, and mounts.
-- **Responses**: text · HTML · JSON · `JsonValue` · templates · files · redirects ·
-  status-only, plus **chunked streaming** and **Server-Sent Events**.
+- **Responses**: text · HTML · JSON (a streaming `JsonWriter` with no intermediate
+  node tree, or a `JsonValue` tree) · templates · files · redirects · status-only,
+  plus **chunked streaming** and **Server-Sent Events**.
 - **Requests**: path/query/form params, JSON bodies, cookies, headers, and
   **multipart file uploads**.
 - **Templates** via [templa](https://github.com/Yusee-Programmer/templa)
