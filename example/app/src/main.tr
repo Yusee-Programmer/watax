@@ -280,4 +280,9 @@ def main():
         .on_error(on_error)
 
     print("watax-notes listening on http://" + cfg_host() + ":" + cfg_port().to_str())
-    app.listen(cfg_host(), cfg_port())
+    # Thread-per-connection: the browser holds several connections at once (the
+    # keep-alive page, the WebSocket, the SSE stream). The single-threaded
+    # `listen` would handle them one at a time — so the long-lived WebSocket /
+    # SSE connections would starve everything else. `listen_threaded` gives each
+    # connection its own OS thread.
+    app.listen_threaded(cfg_host(), cfg_port())
