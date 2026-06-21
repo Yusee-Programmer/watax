@@ -1,7 +1,7 @@
 # watax JSON helpers — request body parsing and JsonValue responses.
 
 from std.net.http_server import HttpConn, HttpRequest
-from std.encoding.json import Json, JsonValue
+from std.encoding.json import Json, JsonValue, JsonWriter
 
 extern "C":
     def _tr_c_free(ptr: Pointer[char])
@@ -27,3 +27,13 @@ extend HttpConn:
         unsafe: _tr_c_free(body as Pointer[char])
         v.read().dispose()
         unsafe: _tr_c_free(v as Pointer[char])
+
+    # Send a streaming-built JSON response. The handler writes directly into the
+    # JsonWriter (no intermediate JsonValue tree — ~30x cheaper for multi-row
+    # arrays). The body is copied into the wire buffer by _send_simple here; the
+    # writer itself is auto-dropped by the CALLER at scope exit (it stays a named
+    # local owned by the handler), so we must NOT free it here — doing so would
+    # double-free with the caller's auto-drop. Pass a named local, e.g.
+    # `mut w = JsonWriter.init(..); ...; c.send_json_writer(200, w)`.
+    pub def send_json_writer(self, status: int, w: JsonWriter):
+        HttpConn._send_simple(self, status, "application/json", w.view())
