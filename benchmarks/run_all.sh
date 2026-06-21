@@ -33,9 +33,9 @@ WATAX_ROOT="$(cd "$BENCH/.." && pwd)"
 RESULTS_MD="$BENCH/results.md"
 LOADTEST="$BENCH/loadtest.py"
 
-CONC="${BENCH_CONC:-50}"        # concurrent keep-alive connections
-DUR="${BENCH_DUR:-8}"           # seconds per endpoint
-THREADS="${BENCH_THREADS:-4}"   # wrk worker threads
+CONC="${BENCH_CONC:-1000}"        # concurrent keep-alive connections
+DUR="${BENCH_DUR:-20}"           # seconds per endpoint
+THREADS="${BENCH_THREADS:-16}"   # wrk worker threads
 PY="$(command -v python3 || command -v python || echo python3)"
 
 # Load generator: prefer wrk (fast, accurate), fall back to the bundled
