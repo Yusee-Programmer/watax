@@ -149,3 +149,18 @@ code {
     font-size: 0.85rem;
     padding: 1.25rem 0;
 }
+
+/* live demo panels (SSE + WebSocket) */
+.live .log {
+    background: #0f1117;
+    color: #b9c2d0;
+    border-radius: 6px;
+    padding: .75rem 1rem;
+    margin: .5rem 0 1.25rem;
+    max-height: 11rem;
+    overflow-y: auto;
+    font: .85rem/1.5 ui-monospace, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+}
+.ws-form, .search-form { display: flex; gap: .5rem; margin: .5rem 0; }
+.ws-form input, .search-form input { flex: 1; }

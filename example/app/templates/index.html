@@ -35,9 +35,20 @@
         <li><a href="/api/notes">GET /api/notes</a> — JSON list (streaming JsonWriter)</li>
         <li><a href="/notes.csv">GET /notes.csv</a> — chunked CSV download</li>
         <li><a href="/healthz">GET /healthz</a> — health JSON</li>
-        <li><a href="/events">GET /events</a> — Server-Sent Events stream</li>
-        <li><code>ws://…/ws</code> — WebSocket echo + live note count</li>
         <li><a href="/about">/about</a> — server info</li>
     </ul>
+</section>
+
+<section class="panel live">
+    <h2>Live (Server-Sent Events)</h2>
+    <button type="button" id="sse-start">Start /events stream</button>
+    <pre id="sse-log" class="log">(idle — click to connect)</pre>
+
+    <h2>Live (WebSocket)</h2>
+    <form id="ws-form" class="ws-form">
+        <input type="text" id="ws-input" placeholder="Send a message to /ws..." autocomplete="off">
+        <button type="submit">Send</button>
+    </form>
+    <pre id="ws-log" class="log">(connecting...)</pre>
 </section>
 {% endblock %}

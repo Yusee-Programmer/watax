@@ -126,7 +126,11 @@ def notes_csv(c: HttpConn):
         i = i + 1
     c.end_chunked()
 
-# Server-Sent Events: push the live note count a handful of times, then close.
+# Server-Sent Events: push the live note count a handful of times, then end the
+# stream. SSE rides on chunked encoding, so end_chunked() writes the terminating
+# 0-length chunk — without it the browser waits forever for more data. Consume
+# this with a JS EventSource (see static/js/app.js), not direct navigation: a
+# browser doesn't render text/event-stream as a page.
 def events(c: HttpConn):
     c.begin_sse()
     mut i = 0
@@ -134,6 +138,7 @@ def events(c: HttpConn):
         c.send_event("notes=" + store_len().to_str() + " tick=" + i.to_str())
         Thread.sleep(1000)
         i = i + 1
+    c.end_chunked()
 
 # WebSocket (RFC 6455): echo each text frame, prefixed with the live note count.
 def ws_notes(c: HttpConn):
