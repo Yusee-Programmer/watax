@@ -1,0 +1,58 @@
+# note.tr — the Note domain model.
+#
+# A single module owning one class keeps the model decoupled from the HTTP
+# layer: handlers (pages/crud/api/streaming) and the store all import `Note`
+# from here, none of them redefine it.
+
+from watax import html_escape
+from std.encoding.json import JsonWriter
+from std.string.str import Str
+
+pub class Note:
+    pub id:    int
+    pub title: str
+    pub body:  str
+    pub done:  bool
+
+extend Note:
+    pub def init(id: int, title: str, body: str) -> Note:
+        mut n = Note()
+        n.id    = id
+        n.title = title
+        n.body  = body
+        n.done  = false
+        return n
+
+    # Render this note as a single <li> fragment for the notes list template.
+    pub def to_html(self) -> str:
+        mut cls = "note"
+        if self.done: cls = "note done"
+
+        mut html = "<li class=\"" + cls + "\">"
+        html = html + "<form class=\"note-toggle\" method=\"post\" action=\"/notes/" + self.id.to_str() + "/toggle\">"
+        if self.done:
+            html = html + "<button type=\"submit\">Undo</button>"
+        else:
+            html = html + "<button type=\"submit\">Done</button>"
+        html = html + "</form>"
+
+        html = html + "<div class=\"note-body-text\">"
+        html = html + "<span class=\"note-title\">" + html_escape(self.title) + "</span>"
+        if Str.len(self.body) > 0:
+            html = html + "<p class=\"note-desc\">" + html_escape(self.body) + "</p>"
+        html = html + "</div>"
+
+        html = html + "<form class=\"note-delete\" method=\"post\" action=\"/notes/" + self.id.to_str() + "/delete\">"
+        html = html + "<button type=\"submit\">Delete</button>"
+        html = html + "</form>"
+        html = html + "</li>"
+        return html
+
+    # Stream this note into a JsonWriter (no intermediate JsonValue tree).
+    pub def write_json(self, w: JsonWriter):
+        w.begin_object()
+        w.field_int("id", self.id)
+        w.field_str("title", self.title)
+        w.field_str("body", self.body)
+        w.field_bool("done", self.done)
+        w.end_object()

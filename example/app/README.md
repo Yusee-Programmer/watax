@@ -1,42 +1,69 @@
 # watax-notes
 
-A small but complete reference application for the **watax** web framework.
-It demonstrates a realistic project layout: server-rendered HTML via
-[templa](../../../templa) templates with a shared layout, static CSS/JS
-assets, form-based CRUD, a JSON API, middleware, centralized error handling,
-and configuration via environment variables.
+A small but complete **reference / showcase application** for the **watax** web
+framework — and a tour of Tauraro itself (classes, modules, refcounted strings
+with automatic cleanup, no manual memory management in user code). It exercises
+almost the entire watax feature surface in one realistic app.
+
+## Project layout (modular)
+
+The app is split into focused modules; `main.tr` is just the HTTP layer + wiring:
+
+| File         | Responsibility                                                |
+|--------------|---------------------------------------------------------------|
+| `src/note.tr`  | the `Note` domain model (`to_html` / `write_json`)          |
+| `src/store.tr` | in-memory note store + config (module-private state behind pub accessor functions) |
+| `src/main.tr`  | route handlers + wiring                                     |
+
+> The HTTP route handlers live in `main.tr` because they call watax's
+> `extend HttpConn` helpers (`send_template`, `send_json_writer`, `abort`,
+> `upgrade_websocket`, …). Domain/state logic that doesn't touch the connection
+> is factored into `note.tr` / `store.tr`.
 
 ## Features demonstrated
 
-- Server-rendered HTML pages (`templates/layout.html`, `index.html`,
+- **Templates** — server-rendered HTML (`layout.html`, `index.html`,
   `about.html`, `404.html`) using templa's `{% extends %}` / `{% block %}`
-  template inheritance.
-- Static assets served from `./static` (`/static/css/style.css`,
-  `/static/js/app.js`).
-- Form-based CRUD over an in-memory note list (`POST /notes`,
-  `POST /notes/:id/toggle`, `POST /notes/:id/delete`).
-- A JSON API under `/api/notes`, guarded by CORS middleware
-  (`app.group("/api")` + `cors_mw`).
-- Centralized 404 handling via `app.on_error(...)`.
-- Request logging via `request_logger_after`.
-- Configuration from environment variables via `Config.from_env()`.
+  inheritance, filters (`| safe`), and context variables / lists.
+- **Static assets** — served from `./static` via `static_dir("/static", …)`.
+- **Middleware** — a *before* hook (`use`) that adds an `X-Powered-By` header,
+  and an *after* hook (`use_after`) for request logging.
+- **Cookies / session state** — a per-session visit counter (`set_cookie` +
+  `request.cookie`).
+- **Query strings** — `/?q=…` search filter (`request.query_param`).
+- **HTML form CRUD** — create / toggle / delete over an in-memory list, with
+  path params (`/notes/:id/…`) and POST-redirect-GET.
+- **JSON REST API** under `/api` (CORS + rate-limited group):
+  `GET/POST/PUT/DELETE /api/notes[/:id]`, parsing JSON request bodies
+  (`request.json()`) and building responses with the streaming **JsonWriter**
+  (`send_json_writer`) — no intermediate node tree.
+- **Health check** — `/healthz` JSON via JsonWriter.
+- **Chunked streaming** — `/notes.csv` exported with chunked transfer-encoding
+  (`begin_chunked` / `write_chunk` / `end_chunked`).
+- **Server-Sent Events** — `/events` (`begin_sse` / `send_event`).
+- **WebSocket** (RFC 6455) — `/ws` echo + live note count (`upgrade_websocket`).
+- **CORS** (`cors_mw`), **rate limiting** (`rate_limit_mw`, returns `429`),
+  **centralized 404/5xx** (`on_error`), **route groups** (`group` / `mount`),
+  **redirects**, **`abort`**, and **config from the environment**
+  (`Config.from_env`).
 
 ## Building and running
 
-This example lives inside the `watax` project tree and uses watax/templa
-directly from source via `TAURARO_PATH` (no `taupkg` package step needed):
+The dependencies (`watax`, `templa`) are vendored under `.taupkg/packages/`.
+`taupkg build` wires up `TAURARO_PATH` automatically; to build by hand with
+`tauraroc`, just put the **packages root** on `TAURARO_PATH` — the resolver
+discovers each package's index module and `src/` directory from there (so both
+the package root *and* explicit `…/<pkg>/src` dirs work). The path separator is
+`:` on Linux/macOS and `;` on Windows.
 
 ```sh
 cd watax/example/app
 
-TAURARO_PATH="<path-to>/watax/src;<path-to>/tauProject" \
-    tauraroc src/main.tr -o watax_notes.exe
+# package root is enough — sibling modules + extends resolve automatically:
+TAURARO_PATH="$PWD/.taupkg/packages" tauraroc src/main.tr -o watax_notes.exe
 
-./watax_notes.exe
+./watax_notes.exe        # listens on http://127.0.0.1:8080
 ```
-
-`<path-to>/tauProject` should be the parent directory that contains both
-`watax/` and `templa/` (so `from templa import ...` resolves).
 
 ## Configuration
 
@@ -46,10 +73,7 @@ All settings are optional and read from the environment:
 |-------------------------|---------------|-----------------------------------|
 | `WATAX_HOST`            | `127.0.0.1`   | Bind address                      |
 | `WATAX_PORT`            | `8080`        | Bind port                         |
-| `WATAX_STATIC_DIR`      | `./public`    | (unused here; app serves `./static` directly) |
 | `WATAX_CORS_ORIGIN`     | `*`           | `Access-Control-Allow-Origin` for `/api/*` |
-| `WATAX_RATE_LIMIT`      | `0` (off)     | Requests per window before `429`  |
-| `WATAX_RATE_WINDOW_MS`  | `60000`       | Rate-limit window size            |
 
 ```sh
 WATAX_PORT=9000 WATAX_CORS_ORIGIN=https://example.com ./watax_notes.exe
@@ -57,13 +81,21 @@ WATAX_PORT=9000 WATAX_CORS_ORIGIN=https://example.com ./watax_notes.exe
 
 ## Routes
 
-| Method | Path                    | Description                         |
-|--------|-------------------------|--------------------------------------|
-| GET    | `/`                     | Notes list (HTML)                    |
-| GET    | `/about`                | About page (HTML)                    |
-| POST   | `/notes`                | Create a note (form: `title`, `body`)|
-| POST   | `/notes/:id/toggle`     | Toggle a note's done state           |
-| POST   | `/notes/:id/delete`     | Delete a note                        |
-| GET    | `/api/notes`            | All notes as JSON (CORS-enabled)     |
-| GET    | `/static/*`             | Static CSS/JS assets                 |
-| *      | (anything else)         | `404.html`                           |
+| Method | Path                  | Description                                  |
+|--------|-----------------------|----------------------------------------------|
+| GET    | `/`                   | Notes list (HTML) + `?q=` search + visit cookie |
+| GET    | `/about`              | About page (template context)                |
+| GET    | `/healthz`            | Health JSON (JsonWriter)                      |
+| GET    | `/notes.csv`          | Notes as CSV (chunked streaming)             |
+| GET    | `/events`             | Server-Sent Events (live note count)         |
+| GET    | `/ws`                 | WebSocket echo + live note count             |
+| POST   | `/notes`              | Create a note (form: `title`, `body`)        |
+| POST   | `/notes/:id/toggle`   | Toggle a note's done state                   |
+| POST   | `/notes/:id/delete`   | Delete a note                                |
+| GET    | `/api/notes`          | List notes as JSON (CORS, rate-limited)      |
+| GET    | `/api/notes/:id`      | One note as JSON                             |
+| POST   | `/api/notes`          | Create from a JSON body                      |
+| PUT    | `/api/notes/:id`      | Update from a JSON body                      |
+| DELETE | `/api/notes/:id`      | Delete a note                                |
+| GET    | `/static/*`           | Static CSS/JS assets                         |
+| *      | (anything else)       | `404.html`                                   |

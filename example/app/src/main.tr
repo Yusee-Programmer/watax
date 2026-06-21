@@ -1,106 +1,87 @@
-# watax-notes — reference application for the watax web framework.
+# watax-notes — the reference / showcase application for the watax web framework
+# (and a tour of Tauraro: classes, modules, refcounted strings with automatic
+# cleanup, no manual memory in user code).
 #
-# Demonstrates:
-#   - Server-rendered HTML via templa templates with a shared layout
-#   - Static CSS/JS served from ./static
-#   - Form-based CRUD over an in-memory note list
-#   - A JSON API under /api, guarded by CORS middleware
-#   - Centralized 404 handling and request logging
-#   - Configuration from environment variables (Config.from_env)
+# Modules:
+#   note.tr   the Note domain model (to_html / write_json)
+#   store.tr  in-memory note store + config (module-private state behind pub fns)
+#   main.tr   the HTTP layer: route handlers + wiring
 #
-# Run:
-#   taupkg build
-#   ./watax_notes.exe
-#   (or set WATAX_HOST / WATAX_PORT / WATAX_CORS_ORIGIN to override)
+# (The HTTP handlers live here because they call watax's `extend HttpConn`
+# helpers — send_template/send_json_writer/cookie/abort/upgrade_websocket — and
+# those extension methods are currently only visible in the entry module.)
+#
+# Feature tour by route:
+#   GET  /                 templa HTML + ?q= search + a visit-counter cookie
+#   GET  /about            template with config context variables
+#   GET  /healthz          health JSON via the streaming JsonWriter
+#   GET  /notes.csv        chunked streaming download
+#   GET  /events           Server-Sent Events (live note count)
+#   GET  /ws               WebSocket echo + live note count
+#   POST /notes            form CRUD: create        (+ /:id/toggle, /:id/delete)
+#   /api/notes[/:id]       JSON REST API (GET/POST/PUT/DELETE), CORS + rate-limited
+#
+# Cross-cutting: a "before" middleware adding a custom header, an "after" hook
+# for request logging, centralized 404/5xx handling, config from environment.
+#
+# Run:  taupkg build  &&  ./watax_notes.exe
+#       (WATAX_HOST / WATAX_PORT / WATAX_CORS_ORIGIN override the defaults)
 
-from watax import App, Config, Context, request_logger_after, set_cors_origin, cors_mw, html_escape
+from watax import App, Config, Context
+from watax import request_logger_after, set_cors_origin, cors_mw, set_rate_limit, rate_limit_mw
+
+from note import Note
+from store import store_seed, set_config, cfg_host, cfg_port
+from store import store_len, store_get, store_set, store_remove, store_add, store_find
+
 from std.net.http_server import HttpConn
-from std.encoding.json import JsonValue
+from std.encoding.json import JsonValue, JsonWriter
 from std.string.str import Str
 from core.vec import Vec
 
-# ── Model ────────────────────────────────────────────────────────────────────
+extern "C":
+    def _tr_c_free(ptr: Pointer[char])
 
-pub class Note:
-    pub id:    int
-    pub title: str
-    pub body:  str
-    pub done:  bool
+# Free a parsed JsonValue tree (request.json() hands the caller ownership).
+def _dispose(v: Pointer[JsonValue]):
+    v.read().dispose()
+    unsafe: _tr_c_free(v as Pointer[char])
 
-extend Note:
-    pub def init(id: int, title: str, body: str) -> Note:
-        mut n = Note()
-        n.id    = id
-        n.title = title
-        n.body  = body
-        n.done  = false
-        return n
+# ── Middleware ───────────────────────────────────────────────────────────────
 
-    # Render this note as a single <li> fragment for the notes list template.
-    pub def to_html(self) -> str:
-        mut cls = "note"
-        if self.done: cls = "note done"
+# "Before" middleware: runs on every request; returning true continues the
+# chain. Adds a custom response header (set_resp_header).
+def powered_by(c: HttpConn) -> bool:
+    c.set_resp_header("X-Powered-By", "watax/tauraro")
+    return true
 
-        mut html = "<li class=\"" + cls + "\">"
-        html = html + "<form class=\"note-toggle\" method=\"post\" action=\"/notes/" + self.id.to_str() + "/toggle\">"
-        if self.done:
-            html = html + "<button type=\"submit\">Undo</button>"
-        else:
-            html = html + "<button type=\"submit\">Done</button>"
-        html = html + "</form>"
-
-        html = html + "<div class=\"note-body-text\">"
-        html = html + "<span class=\"note-title\">" + html_escape(self.title) + "</span>"
-        if Str.len(self.body) > 0:
-            html = html + "<p class=\"note-desc\">" + html_escape(self.body) + "</p>"
-        html = html + "</div>"
-
-        html = html + "<form class=\"note-delete\" method=\"post\" action=\"/notes/" + self.id.to_str() + "/delete\">"
-        html = html + "<button type=\"submit\">Delete</button>"
-        html = html + "</form>"
-        html = html + "</li>"
-        return html
-
-    pub def to_json(self) -> Pointer[JsonValue]:
-        mut o = JsonValue.init_object()
-        o.read().obj_set("id", JsonValue.init_int(self.id))
-        o.read().obj_set("title", JsonValue.init_str(self.title))
-        o.read().obj_set("body", JsonValue.init_str(self.body))
-        o.read().obj_set("done", JsonValue.init_bool(self.done))
-        return o
-
-# ── In-memory store ──────────────────────────────────────────────────────────
-
-mut notes:   Vec[Note] = Vec[Note].init(8)
-mut next_id: int = 1
-
-mut cfg_host: str = "127.0.0.1"
-mut cfg_port: int = 8000
-
-def seed_notes():
-    notes.push(Note.init(next_id, "Read the watax docs", "Skim README.md and example/app"))
-    next_id = next_id + 1
-    notes.push(Note.init(next_id, "Try the JSON API", "GET /api/notes returns these notes as JSON"))
-    next_id = next_id + 1
-
-def find_note(id: int) -> int:
-    mut i = 0
-    while i < notes.len:
-        if notes.get(i).id == id: return i
-        i = i + 1
-    return -1
-
-# ── Page handlers ────────────────────────────────────────────────────────────
+# ── Pages (server-rendered HTML) ─────────────────────────────────────────────
 
 def home(c: HttpConn):
-    mut ctx   = Context.init()
-    mut items = Vec[str].init(notes.len)
+    mut ctx = Context.init()
+
+    # Visit counter persisted in a cookie (simple session-style state).
+    mut visits = Str.parse_int(c.request.cookie("visits")) + 1
+    c.set_cookie("visits", visits.to_str(), "/", false)
+    ctx.set("visits", visits.to_str())
+
+    # Optional ?q= search filter over note titles/bodies (query parameter).
+    mut q = Str.to_lower(Str.trim(c.request.query_param("q")))
+    ctx.set("query", q)
+
+    mut items = Vec[str].init(store_len())
     mut i = 0
-    while i < notes.len:
-        items.push(notes.get(i).to_html())
+    while i < store_len():
+        mut n = store_get(i)
+        mut keep = Str.len(q) == 0
+        if not keep:
+            if Str.contains(Str.to_lower(n.title), q) or Str.contains(Str.to_lower(n.body), q):
+                keep = true
+        if keep: items.push(n.to_html())
         i = i + 1
     ctx.set_list("notes", items)
-    if notes.len > 0:
+
+    if items.len > 0:
         ctx.set("has_notes", "true")
     else:
         ctx.set("has_notes", "")
@@ -108,10 +89,20 @@ def home(c: HttpConn):
 
 def about(c: HttpConn):
     mut ctx = Context.init()
-    ctx.set("version", "0.1.0")
-    ctx.set("host", cfg_host)
-    ctx.set("port", cfg_port.to_str())
+    ctx.set("version", "0.2.0")
+    ctx.set("host", cfg_host())
+    ctx.set("port", cfg_port().to_str())
     c.send_template(200, "templates/about.html", ctx)
+
+# Health check — small JSON built with the streaming writer.
+def healthz(c: HttpConn):
+    mut w = JsonWriter.init(64)
+    w.begin_object()
+    w.field_str("status", "ok")
+    w.field_int("notes", store_len())
+    w.field_str("framework", "watax")
+    w.end_object()
+    c.send_json_writer(200, w)
 
 # Centralized error handler — used for 404s (and as a fallback for 5xx).
 def on_error(c: HttpConn, status: int):
@@ -120,62 +111,168 @@ def on_error(c: HttpConn, status: int):
     else:
         c.send_text(status, "Internal Server Error")
 
-# ── Form handlers (CRUD) ─────────────────────────────────────────────────────
+# ── Streaming responses ──────────────────────────────────────────────────────
+
+# Export all notes as CSV using chunked transfer-encoding (no full body buffer).
+def notes_csv(c: HttpConn):
+    c.begin_chunked(200, "text/csv; charset=utf-8")
+    c.write_chunk("id,title,body,done\n")
+    mut i = 0
+    while i < store_len():
+        mut n = store_get(i)
+        mut done_s = "false"
+        if n.done: done_s = "true"
+        c.write_chunk(n.id.to_str() + ",\"" + n.title + "\",\"" + n.body + "\"," + done_s + "\n")
+        i = i + 1
+    c.end_chunked()
+
+# Server-Sent Events: push the live note count a handful of times, then close.
+def events(c: HttpConn):
+    c.begin_sse()
+    mut i = 0
+    while i < 5:
+        c.send_event("notes=" + store_len().to_str() + " tick=" + i.to_str())
+        Thread.sleep(1000)
+        i = i + 1
+
+# WebSocket (RFC 6455): echo each text frame, prefixed with the live note count.
+def ws_notes(c: HttpConn):
+    mut ws = c.upgrade_websocket()
+    ws.send_text("connected - " + store_len().to_str() + " notes")
+    while ws.is_open():
+        mut msg = ws.recv_text()
+        if Str.len(msg) == 0:
+            break
+        ws.send_text("[" + store_len().to_str() + " notes] you said: " + msg)
+    ws.send_close()
+
+# ── Form handlers (HTML CRUD) ────────────────────────────────────────────────
 
 def create_note(c: HttpConn):
     mut title = Str.trim(c.request.form_param("title"))
     mut body  = Str.trim(c.request.form_param("body"))
     if Str.len(title) > 0:
-        notes.push(Note.init(next_id, title, body))
-        next_id = next_id + 1
+        store_add(title, body)
     c.redirect("/", false)
 
 def toggle_note(c: HttpConn):
-    mut idx = find_note(Str.parse_int(c.request.get_param("id")))
+    mut idx = store_find(Str.parse_int(c.request.get_param("id")))
     if idx >= 0:
-        mut n  = notes.get(idx)
+        mut n  = store_get(idx)
         n.done = not n.done
-        notes.set(idx, n)
+        store_set(idx, n)
     c.redirect("/", false)
 
 def delete_note(c: HttpConn):
-    mut idx = find_note(Str.parse_int(c.request.get_param("id")))
-    if idx >= 0: notes.remove(idx)
+    mut idx = store_find(Str.parse_int(c.request.get_param("id")))
+    if idx >= 0: store_remove(idx)
     c.redirect("/", false)
 
-# ── JSON API ─────────────────────────────────────────────────────────────────
+# ── JSON REST API (under /api, CORS + rate-limited) ──────────────────────────
 
 def api_list_notes(c: HttpConn):
-    mut arr = JsonValue.init_array()
+    mut w = JsonWriter.init(256)
+    w.begin_array()
     mut i = 0
-    while i < notes.len:
-        arr.read().push(notes.get(i).to_json())
+    while i < store_len():
+        store_get(i).write_json(w)
         i = i + 1
-    c.send_json_value(200, arr)
+    w.end_array()
+    c.send_json_writer(200, w)
+
+def api_get_note(c: HttpConn):
+    mut idx = store_find(Str.parse_int(c.request.get_param("id")))
+    if idx < 0:
+        c.abort(404, "{\"error\":\"not found\"}")
+        return
+    mut w = JsonWriter.init(128)
+    store_get(idx).write_json(w)
+    c.send_json_writer(200, w)
+
+def api_create_note(c: HttpConn):
+    mut v = c.request.json()
+    if not v.read().is_object():
+        _dispose(v)
+        c.abort(400, "{\"error\":\"expected a JSON object\"}")
+        return
+    mut title = Str.trim(v.read().obj_get("title").read().get_str())
+    mut body  = Str.trim(v.read().obj_get("body").read().get_str())
+    _dispose(v)
+    if Str.len(title) == 0:
+        c.abort(400, "{\"error\":\"title is required\"}")
+        return
+    mut n = store_add(title, body)
+    mut w = JsonWriter.init(128)
+    n.write_json(w)
+    c.send_json_writer(201, w)
+
+def api_update_note(c: HttpConn):
+    mut idx = store_find(Str.parse_int(c.request.get_param("id")))
+    if idx < 0:
+        c.abort(404, "{\"error\":\"not found\"}")
+        return
+    mut v = c.request.json()
+    if not v.read().is_object():
+        _dispose(v)
+        c.abort(400, "{\"error\":\"expected a JSON object\"}")
+        return
+    mut n = store_get(idx)
+    if v.read().obj_has("title"): n.title = v.read().obj_get("title").read().get_str()
+    if v.read().obj_has("body"):  n.body  = v.read().obj_get("body").read().get_str()
+    if v.read().obj_has("done"):  n.done  = v.read().obj_get("done").read().get_bool()
+    store_set(idx, n)
+    _dispose(v)
+    mut w = JsonWriter.init(128)
+    n.write_json(w)
+    c.send_json_writer(200, w)
+
+def api_delete_note(c: HttpConn):
+    mut idx = store_find(Str.parse_int(c.request.get_param("id")))
+    if idx < 0:
+        c.abort(404, "{\"error\":\"not found\"}")
+        return
+    store_remove(idx)
+    mut w = JsonWriter.init(32)
+    w.begin_object()
+    w.field_bool("ok", true)
+    w.end_object()
+    c.send_json_writer(200, w)
 
 # ── Wiring ───────────────────────────────────────────────────────────────────
 
 def main():
-    seed_notes()
+    store_seed()
 
     mut cfg = Config.from_env()
-    cfg_host = cfg.host
-    cfg_port = cfg.port
+    set_config(cfg.host, cfg.port)
     set_cors_origin(cfg.cors_origin)
+    set_rate_limit(120, 60000)   # 120 requests / 60s per client on the API group
 
     mut app = App.new()
+        .use(powered_by)
         .use_after(request_logger_after)
         .static_dir("/static", "./static")
         .get("/", home)
         .get("/about", about)
+        .get("/healthz", healthz)
+        .get("/notes.csv", notes_csv)
+        .get("/events", events)
+        .get("/ws", ws_notes)
         .post("/notes", create_note)
         .post("/notes/:id/toggle", toggle_note)
         .post("/notes/:id/delete", delete_note)
 
     mut api = app.group("/api")
         .use(cors_mw)
+        .use(rate_limit_mw)
         .get("/notes", api_list_notes)
+        .get("/notes/:id", api_get_note)
+        .post("/notes", api_create_note)
+        .put("/notes/:id", api_update_note)
+        .delete("/notes/:id", api_delete_note)
 
     app = app.mount(api)
         .on_error(on_error)
-    app.listen(cfg.host, 8000)
+
+    print("watax-notes listening on http://" + cfg_host() + ":" + cfg_port().to_str())
+    app.listen(cfg_host(), cfg_port())

@@ -1,0 +1,60 @@
+# store.tr — the in-memory note store and app configuration.
+#
+# Module-level globals are private to this module (the `_` prefix); other
+# modules go through the pub accessor functions, so the storage representation
+# can change without touching the handlers. (Same pattern watax itself uses for
+# its CORS / rate-limit state.)
+
+from note import Note
+from core.vec import Vec
+
+mut _notes:    Vec[Note] = Vec[Note].init(8)
+mut _next_id:  int = 1
+mut _cfg_host: str = "127.0.0.1"
+mut _cfg_port: int = 8000
+
+# ── Notes ────────────────────────────────────────────────────────────────────
+
+pub def store_seed():
+    store_add("Read the watax docs", "Skim README.md and example/app")
+    store_add("Try the JSON API", "GET /api/notes returns these notes as JSON")
+    store_add("Open a WebSocket", "Connect to /ws and send a message")
+
+pub def store_len() -> int:
+    return _notes.len
+
+pub def store_get(idx: int) -> Note:
+    return _notes.get(idx)
+
+pub def store_set(idx: int, n: Note):
+    _notes.set(idx, n)
+
+pub def store_remove(idx: int):
+    _notes.remove(idx)
+
+# Append a new note, returning the stored value (with its assigned id).
+pub def store_add(title: str, body: str) -> Note:
+    mut n = Note.init(_next_id, title, body)
+    _notes.push(n)
+    _next_id = _next_id + 1
+    return n
+
+# Index of the note with this id, or -1.
+pub def store_find(id: int) -> int:
+    mut i = 0
+    while i < _notes.len:
+        if _notes.get(i).id == id: return i
+        i = i + 1
+    return -1
+
+# ── Config ───────────────────────────────────────────────────────────────────
+
+pub def set_config(host: str, port: int):
+    _cfg_host = host
+    _cfg_port = port
+
+pub def cfg_host() -> str:
+    return _cfg_host
+
+pub def cfg_port() -> int:
+    return _cfg_port
