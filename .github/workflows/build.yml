@@ -120,10 +120,10 @@ jobs:
             !**/build/**
             !benchmarks/axum_app/target/**
 
-  ===================================================================
-  Benchmark: watax vs axum (Rust) vs FastAPI (Python) on Linux, then
-  COMMIT benchmarks/results.md back to the repo (default-branch push only).
-  ===================================================================
+  # ===================================================================
+  # Benchmark: watax vs axum (Rust) vs FastAPI (Python) on Linux, then
+  # COMMIT benchmarks/results.md back to the repo (default-branch push only).
+  # ===================================================================
   benchmark:
     needs: build
     # Run on pushes to the repository's DEFAULT branch, whatever it's named
