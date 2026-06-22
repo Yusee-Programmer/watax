@@ -120,69 +120,69 @@ jobs:
             !**/build/**
             !benchmarks/axum_app/target/**
 
-  # ===================================================================
-  # Benchmark: watax vs axum (Rust) vs FastAPI (Python) on Linux, then
-  # COMMIT benchmarks/results.md back to the repo (default-branch push only).
-  # ===================================================================
-  # benchmark:
-  #   needs: build
-  #   # Run on pushes to the repository's DEFAULT branch, whatever it's named
-  #   # (this repo uses `main`), then commit results.md back.
-  #   if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-  #   runs-on: ubuntu-latest
-  #   permissions:
-  #     contents: write
+  ===================================================================
+  Benchmark: watax vs axum (Rust) vs FastAPI (Python) on Linux, then
+  COMMIT benchmarks/results.md back to the repo (default-branch push only).
+  ===================================================================
+  benchmark:
+    needs: build
+    # Run on pushes to the repository's DEFAULT branch, whatever it's named
+    # (this repo uses `main`), then commit results.md back.
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
-  #   steps:
-  #     - name: Checkout watax
-  #       uses: actions/checkout@v4
-  #       with:
-  #         token: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout watax
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-  #     - name: Bootstrap tauraroc + deps via taupkg
-  #       shell: bash
-  #       env:
-  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #       run: |
-  #         set -e
-  #         gh release download --repo tauraro/taupkg \
-  #           --pattern "taupkg-linux-x64.zip" --dir taupkg-dl --clobber
-  #         mkdir -p taupkg-bin && unzip -oq "taupkg-dl/taupkg-linux-x64.zip" -d taupkg-bin
-  #         TAUPKG=$(find taupkg-bin -name "taupkg" -type f | head -1); chmod +x "$TAUPKG"
-  #         # Resolve the version via authenticated gh (avoids install-tauraro's
-  #         # rate-limited unauthenticated api.github.com call) and pass --version.
-  #         VER=$(gh release view --repo tauraro/tauraro --json tagName -q '.tagName' 2>/dev/null | sed 's/^v//')
-  #         if [ -n "$VER" ]; then
-  #           "$TAUPKG" install-tauraro --version "$VER" --verbose || true
-  #         else
-  #           "$TAUPKG" install-tauraro --verbose || true
-  #         fi
-  #         TAURAROC=$(find "$HOME/.taupkg/bin" -name "tauraroc" -type f 2>/dev/null | head -1)
-  #         [ -z "$TAURAROC" ] && { echo "error: tauraroc not found"; exit 1; }
-  #         echo "TAURAROC=$TAURAROC" >> "$GITHUB_ENV"
-  #         "$TAUPKG" install || true
-  #         if [ ! -d .taupkg/packages/templa ]; then
-  #           mkdir -p .taupkg/packages
-  #           git clone --depth 1 https://github.com/Yusee-Programmer/templa.git .taupkg/packages/templa
-  #         fi
+      - name: Bootstrap tauraroc + deps via taupkg
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          gh release download --repo tauraro/taupkg \
+            --pattern "taupkg-linux-x64.zip" --dir taupkg-dl --clobber
+          mkdir -p taupkg-bin && unzip -oq "taupkg-dl/taupkg-linux-x64.zip" -d taupkg-bin
+          TAUPKG=$(find taupkg-bin -name "taupkg" -type f | head -1); chmod +x "$TAUPKG"
+          # Resolve the version via authenticated gh (avoids install-tauraro's
+          # rate-limited unauthenticated api.github.com call) and pass --version.
+          VER=$(gh release view --repo tauraro/tauraro --json tagName -q '.tagName' 2>/dev/null | sed 's/^v//')
+          if [ -n "$VER" ]; then
+            "$TAUPKG" install-tauraro --version "$VER" --verbose || true
+          else
+            "$TAUPKG" install-tauraro --verbose || true
+          fi
+          TAURAROC=$(find "$HOME/.taupkg/bin" -name "tauraroc" -type f 2>/dev/null | head -1)
+          [ -z "$TAURAROC" ] && { echo "error: tauraroc not found"; exit 1; }
+          echo "TAURAROC=$TAURAROC" >> "$GITHUB_ENV"
+          "$TAUPKG" install || true
+          if [ ! -d .taupkg/packages/templa ]; then
+            mkdir -p .taupkg/packages
+            git clone --depth 1 https://github.com/Yusee-Programmer/templa.git .taupkg/packages/templa
+          fi
 
-  #     - name: Install benchmark toolchains (wrk, Rust, FastAPI)
-  #       run: |
-  #         sudo apt-get update -qq
-  #         sudo apt-get install -y -qq wrk
-  #         rustup show >/dev/null 2>&1 || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-  #         echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-  #         python3 -m pip install --quiet --upgrade pip
-  #         python3 -m pip install --quiet fastapi "uvicorn[standard]"
+      - name: Install benchmark toolchains (wrk, Rust, FastAPI)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wrk
+          rustup show >/dev/null 2>&1 || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet fastapi "uvicorn[standard]"
 
-  #     - name: Run benchmarks (watax vs axum vs FastAPI)
-  #       env:
-  #         BENCH_CONC: "50"
-  #         BENCH_DUR: "8"
-  #       run: |
-  #         bash benchmarks/run_all.sh || true
-  #         echo "===== benchmarks/results.md ====="
-  #         cat benchmarks/results.md || echo "no results.md produced"
+      - name: Run benchmarks (watax vs axum vs FastAPI)
+        env:
+          BENCH_CONC: "50"
+          BENCH_DUR: "8"
+        run: |
+          bash benchmarks/run_all.sh || true
+          echo "===== benchmarks/results.md ====="
+          cat benchmarks/results.md || echo "no results.md produced"
 
-  #     - name: Commit and push results.md
-  #       run: bash scripts/push-benchmark-results.sh
+      - name: Commit and push results.md
+        run: bash scripts/push-benchmark-results.sh
