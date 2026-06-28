@@ -69,6 +69,11 @@ mut _rl_limit:     int = 0
 mut _rl_window_ms: int = 0
 mut _rl_state: Mutex[Map[str, _RateState]] = Mutex[Map[str, _RateState]].init(Map[str, _RateState].init(64))
 
+def _copy_rate_state(table: ref Map[str, _RateState], key: str) -> _RateState:
+    mut st_ref = table.get(key)
+    mut copy = st_ref
+    return copy
+
 # Enable the built-in rate limiter: `limit` requests per `window_ms`
 # milliseconds, per remote peer address. Call once at startup before
 # registering `rate_limit_mw`.
@@ -83,7 +88,7 @@ pub def _rate_allow(key: str) -> bool:
     mut table = _rl_state.get()
     mut ok    = true
     if table.contains(key):
-        mut st = table.get(key).clone()
+        mut st = _copy_rate_state(table, key)
         if now - st.window_start >= _rl_window_ms:
             st.window_start = now
             st.count        = 1
