@@ -142,7 +142,7 @@ def _reactor_run(w: ReactorWorker):
             else:
                 mut fd = ev.userdata
                 if conns.contains(fd):
-                    mut rc = conns.get(fd)
+                    mut rc = conns.get(fd).clone()
                     mut status = rc.poll_read()
                     if status == -1:
                         poll.remove(fd)
@@ -150,14 +150,14 @@ def _reactor_run(w: ReactorWorker):
                         rc.dispose()
                         conns.remove(fd)
                         if httpconns.contains(fd):
-                            mut dead_conn = httpconns.get(fd)
+                            mut dead_conn = httpconns.get(fd).clone()
                             dead_conn.dispose()
                             httpconns.remove(fd)
                     elif status == 1:
                         mut req = rc.take_request()
                         mut conn: HttpConn
                         if httpconns.contains(fd):
-                            conn = httpconns.get(fd)
+                            conn = httpconns.get(fd).clone()
                             mut prev_req = conn.request
                             conn.reset_for(req)
                             prev_req.free_owned()

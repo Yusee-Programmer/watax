@@ -83,7 +83,7 @@ pub def _rate_allow(key: str) -> bool:
     mut table = _rl_state.get()
     mut ok    = true
     if table.contains(key):
-        mut st = table.get(key)
+        mut st = table.get(key).clone()
         if now - st.window_start >= _rl_window_ms:
             st.window_start = now
             st.count        = 1
