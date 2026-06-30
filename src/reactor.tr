@@ -116,16 +116,6 @@ extend ReactorWorker:
 # poll set (never a valid socket fd).
 def _listener_ud() -> int: return -1
 
-def _copy_rconn(conns: ref Map[int, RConn], fd: int) -> RConn:
-    mut rc_ref = conns.get(fd)
-    mut copy = rc_ref
-    return copy
-
-def _copy_httpconn(httpconns: ref Map[int, HttpConn], fd: int) -> HttpConn:
-    mut conn_ref = httpconns.get(fd)
-    mut copy = conn_ref
-    return copy
-
 def _reactor_run(w: ReactorWorker):
     mut app      = w.app.get()
     mut listener = w.listener.get()
@@ -152,34 +142,31 @@ def _reactor_run(w: ReactorWorker):
             else:
                 mut fd = ev.userdata
                 if conns.contains(fd):
-                    mut rc = _copy_rconn(conns, fd)
-                    mut status = rc.poll_read()
+                    mut status = conns.get(fd).poll_read()
                     if status == -1:
                         poll.remove(fd)
-                        rc.stream.close()
-                        rc.dispose()
+                        conns.get(fd).stream.close()
+                        conns.get(fd).dispose()
                         conns.remove(fd)
                         if httpconns.contains(fd):
-                            mut dead_conn = _copy_httpconn(httpconns, fd)
-                            dead_conn.dispose()
+                            httpconns.get(fd).dispose()
                             httpconns.remove(fd)
                     elif status == 1:
-                        mut req = rc.take_request()
-                        mut conn: HttpConn
+                        mut req = conns.get(fd).take_request()
                         if httpconns.contains(fd):
-                            conn = _copy_httpconn(httpconns, fd)
-                            mut prev_req = conn.request
-                            conn.reset_for(req)
+                            mut prev_req = httpconns.get(fd).request
+                            httpconns.get(fd).reset_for(req)
                             prev_req.free_owned()
                         else:
-                            conn = HttpConn.init(req, rc.stream)
+                            mut conn = HttpConn.init(req, conns.get(fd).stream)
                             httpconns.insert(fd, conn)
-                        App._dispatch(app, conn)
-                        if conn._closed or not conn.request.keep_alive():
+                        App._dispatch(app, httpconns.get(fd))
+                        mut closed = httpconns.get(fd)._closed
+                        if closed or not httpconns.get(fd).request.keep_alive():
                             poll.remove(fd)
-                            if not conn._closed: conn.close()
-                            conn.dispose()
-                            rc.dispose()
+                            if not closed: httpconns.get(fd).close()
+                            httpconns.get(fd).dispose()
+                            conns.get(fd).dispose()
                             conns.remove(fd)
                             httpconns.remove(fd)
             # poll.wait() heap-allocates each IOEvent individually (Vec.free()
