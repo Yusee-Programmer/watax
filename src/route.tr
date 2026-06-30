@@ -38,7 +38,9 @@ extend Route:
     # allocations are the Str.slice() calls for ':name'/'*name' captures
     # that get stored into req.params (non-empty ones only - empty-range
     # slices are the "" literal and are never freed).
-    pub def matches(self, req: HttpRequest) -> bool:
+    # `mut ref`: req.params is mutated (path captures written in), so an
+    # exclusive borrow is required. --strict enforces no concurrent reader.
+    pub def matches(self, req: mut ref HttpRequest) -> bool:
         if not Str.eq(self.method, req.method): return false
         mut pat  = self.pattern
         mut path = req.path

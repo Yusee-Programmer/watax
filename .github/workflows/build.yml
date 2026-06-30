@@ -96,7 +96,7 @@ jobs:
         shell: bash
         run: |
           export TAURARO_PATH="$(pwd)/.taupkg/packages:$(pwd)/src"
-          "$TAURAROC" src/main.tr -o "watax${{ matrix.ext }}"
+          "$TAURAROC" --strict src/main.tr -o "watax${{ matrix.ext }}"
           [ -f "watax${{ matrix.ext }}" ] || { echo "error: watax did not build"; exit 1; }
           echo "==> Built watax${{ matrix.ext }}: $(ls -lh watax${{ matrix.ext }})"
 
