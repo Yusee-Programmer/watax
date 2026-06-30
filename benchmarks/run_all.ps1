@@ -78,7 +78,7 @@ if ($TAU -and (Test-Path $TAU)) {
     $rootFwd = $WATAX_ROOT -replace '\\','/'
     $env:TAURARO_PATH = "$rootFwd/.taupkg/packages;$rootFwd/src"
     Push-Location $WATAX_ROOT
-    & $TAU -O3 "benchmarks/watax_app/src/main.tr" -o "$BENCH\watax_app\server.exe" 2>&1 | Out-File "$env:TEMP\watax_build.log"
+    & $TAU --strict -O3 "benchmarks/watax_app/src/main.tr" -o "$BENCH\watax_app\server.exe" 2>&1 | Out-File "$env:TEMP\watax_build.log"
     Pop-Location
     $wx = "$BENCH\watax_app\server.exe"
     if (Test-Path $wx) {

@@ -78,7 +78,9 @@ pub def set_rate_limit(limit: int, window_ms: int):
 
 # Returns true if `key` is still within its quota for the current window
 # (and increments its counter); false if it has been exceeded.
-pub def _rate_allow(key: str) -> bool:
+# `ref str`: key is only read (map lookup), never stored. Elides ARC
+# retain/release under --strict; otherwise behaves identically.
+pub def _rate_allow(key: ref str) -> bool:
     mut now   = Clock.now_ms()
     mut table = _rl_state.get()
     mut ok    = true
@@ -135,12 +137,14 @@ extend SessionCodec:
         return s
 
     # Sign `value`, producing "value.signature" for use as a cookie value.
-    pub def encode(self, value: str) -> str:
+    # `ref str`: value is only read (HMAC'd and concatenated), never stored.
+    pub def encode(self, value: ref str) -> str:
         return value + "." + Hmac.sha256_str(self.secret, value)
 
     # Verify a cookie value produced by encode(); returns the original value,
     # or "" if missing, malformed, or the signature doesn't match.
-    pub def decode(self, signed: str) -> str:
+    # `ref str`: signed is only read (sliced/compared), never stored.
+    pub def decode(self, signed: ref str) -> str:
         if Str.len(signed) == 0: return ""
         mut dot = Str.last_index_of(signed, ".")
         if dot < 0: return ""

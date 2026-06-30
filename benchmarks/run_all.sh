@@ -170,7 +170,7 @@ if [ -n "$TAU_EXE" ] && [ -x "$TAU_EXE" ] || command -v "$TAU_EXE" &>/dev/null; 
     # modules (src/) and the templa dependency (.taupkg/packages/).
     ( cd "$WATAX_ROOT" \
       && TAURARO_PATH="$WATAX_ROOT/.taupkg/packages:$WATAX_ROOT/src" \
-         "$TAU_EXE" -O3 benchmarks/watax_app/src/main.tr -o "$BENCH/watax_app/server" >/tmp/watax_build.log 2>&1 )
+         "$TAU_EXE" --strict -O3 benchmarks/watax_app/src/main.tr -o "$BENCH/watax_app/server" >/tmp/watax_build.log 2>&1 )
     WX="$BENCH/watax_app/server"; [ -x "$WX" ] || WX="$BENCH/watax_app/server.exe"
     if [ -x "$WX" ]; then
         "$WX" & SERVER_PID=$!
