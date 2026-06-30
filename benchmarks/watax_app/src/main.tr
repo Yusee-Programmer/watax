@@ -17,10 +17,12 @@
 #   GET /plaintext-big      -> ~8 KB plain text (large response)
 #
 # Memory note: response bodies are freed by the framework. send_json_value takes
-# ownership of the JsonValue tree and frees it; send_text/send_html copy the body
-# and the compiler releases it after the call when it's passed as a FRESH
-# expression (e.g. `send_text(200, sb.to_owned())`) — which is why the fortunes /
-# plaintext-big handlers build into a StringBuilder and pass sb.to_owned() inline.
+# ownership of the JsonValue tree and frees it; send_json_writer frees the writer
+# internally (Tauraro's coll_escaped rule suppresses caller auto-drop for any
+# class instance passed as a call argument, so the framework must free it).
+# send_text/send_html copy the body and the compiler releases it after the call
+# when it's passed as a FRESH expression (e.g. `send_text(200, sb.to_owned())`)
+# — which is why the fortunes/plaintext-big handlers pass sb.to_owned() inline.
 # No manual memory management in user code.
 
 from watax import App, html_escape, WsConn

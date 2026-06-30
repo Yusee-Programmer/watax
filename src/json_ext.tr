@@ -30,10 +30,16 @@ extend HttpConn:
 
     # Send a streaming-built JSON response. The handler writes directly into the
     # JsonWriter (no intermediate JsonValue tree — ~30x cheaper for multi-row
-    # arrays). The body is copied into the wire buffer by _send_simple here; the
-    # writer itself is auto-dropped by the CALLER at scope exit (it stays a named
-    # local owned by the handler), so we must NOT free it here — doing so would
-    # double-free with the caller's auto-drop. Pass a named local, e.g.
-    # `mut w = JsonWriter.init(..); ...; c.send_json_writer(200, w)`.
+    # arrays). The body is copied into the wire buffer by _send_simple here;
+    # then the writer is freed explicitly below.
+    #
+    # Why w.free() here and not in the caller: Tauraro's `mark_coll_arg` rule
+    # marks every user-defined class instance that appears in a non-receiver
+    # call-argument position as `coll_escaped`, which suppresses the caller's
+    # auto-drop. So a caller like `c.send_json_writer(200, w)` never emits
+    # `JsonWriter_free(w)` at scope exit — without the explicit free here the
+    # writer (StringBuilder + Vec[bool] + struct, ~200-700 B) leaks on every
+    # request. No double-free risk: the caller's auto-drop is definitively off.
     pub def send_json_writer(self, status: int, w: JsonWriter):
         HttpConn._send_simple(self, status, "application/json", w.view())
+        w.free()
