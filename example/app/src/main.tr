@@ -35,17 +35,11 @@ from store import store_seed, set_config, cfg_host, cfg_port
 from store import store_len, store_get, store_set, store_remove, store_add, store_find
 
 from std.net.http_server import HttpConn
-from std.encoding.json import JsonValue, JsonWriter
+from std.encoding.json import JsonWriter
 from std.string.str import Str
 from core.vec import Vec
 
-extern "C":
-    def _tr_c_free(ptr: Pointer[char])
 
-# Free a parsed JsonValue tree (request.json() hands the caller ownership).
-def _dispose(v: Pointer[JsonValue]):
-    v.read().dispose()
-    unsafe: _tr_c_free(v as Pointer[char])
 
 # ── Middleware ───────────────────────────────────────────────────────────────
 
@@ -196,13 +190,11 @@ def api_get_note(c: HttpConn):
 
 def api_create_note(c: HttpConn):
     mut v = c.request.json()
-    if not v.read().is_object():
-        _dispose(v)
+    if not v.root().is_object():
         c.abort(400, "{\"error\":\"expected a JSON object\"}")
         return
-    mut title = Str.trim(v.read().obj_get("title").read().get_str())
-    mut body  = Str.trim(v.read().obj_get("body").read().get_str())
-    _dispose(v)
+    mut title = Str.trim(v.root().obj_get("title").get_str())
+    mut body  = Str.trim(v.root().obj_get("body").get_str())
     if Str.len(title) == 0:
         c.abort(400, "{\"error\":\"title is required\"}")
         return
@@ -217,16 +209,14 @@ def api_update_note(c: HttpConn):
         c.abort(404, "{\"error\":\"not found\"}")
         return
     mut v = c.request.json()
-    if not v.read().is_object():
-        _dispose(v)
+    if not v.root().is_object():
         c.abort(400, "{\"error\":\"expected a JSON object\"}")
         return
     mut n = store_get(idx)
-    if v.read().obj_has("title"): n.title = v.read().obj_get("title").read().get_str()
-    if v.read().obj_has("body"):  n.body  = v.read().obj_get("body").read().get_str()
-    if v.read().obj_has("done"):  n.done  = v.read().obj_get("done").read().get_bool()
+    if v.root().obj_has("title"): n.title = v.root().obj_get("title").get_str()
+    if v.root().obj_has("body"):  n.body  = v.root().obj_get("body").get_str()
+    if v.root().obj_has("done"):  n.done  = v.root().obj_get("done").get_bool()
     store_set(idx, n)
-    _dispose(v)
     mut w = JsonWriter.init(128)
     n.write_json(w)
     c.send_json_writer(200, w)

@@ -1,3 +1,4 @@
+# @trusted: watax framework core — audited byte-level parsing/reactor (raw-pointer systems code, like hyper/tokio internals).
 # watax multipart/form-data parsing — multi-field forms and file uploads.
 #
 #   mut form = c.request.multipart()

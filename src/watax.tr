@@ -28,7 +28,7 @@
 # in their own modules (routing, static files, JSON, templates, app/server)
 # so users only need `from watax import ...`.
 
-from std.encoding.json import JsonValue
+from std.encoding.json import JsonDoc, JsonRef, JsonWriter
 from templa import Context
 
 from route import Route

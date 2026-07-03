@@ -1,45 +1,28 @@
-# watax JSON helpers — request body parsing and JsonValue responses.
+# watax JSON helpers — request body parsing (zero-cost arena) and JSON responses.
 
 from std.net.http_server import HttpConn, HttpRequest
-from std.encoding.json import Json, JsonValue, JsonWriter
-
-extern "C":
-    def _tr_c_free(ptr: Pointer[char])
+from std.encoding.json import Json, JsonDoc, JsonRef, JsonWriter
 
 extend HttpRequest:
-    # Parse the request body as JSON.
-    pub def json(self) -> Pointer[JsonValue]:
+    # Parse the request body as JSON. Returns a `JsonDoc` that OWNS a flat arena
+    # (no per-node malloc) plus one decoded-string buffer (no per-string malloc).
+    # Navigate it with `doc.root().obj_get("k").get_str()` — string reads can be
+    # zero-copy via `.str_view()` / `.str_eq()`. The whole arena is reclaimed in
+    # one shot when `doc` goes out of scope; the caller frees NOTHING.
+    pub def json(self) -> JsonDoc:
         return Json.parse(self.body)
 
 extend HttpConn:
-    # Serialize a JsonValue tree and send it as a JSON response, then free the
-    # whole tree. The caller hands ownership of `v` to watax and frees NOTHING:
-    #   - `body` is serialized here, sent, and released (it's a local, last use);
-    #   - `v` (and its entire child tree) is disposed and freed.
-    # This is the recommended way to return JSON: build a JsonValue and pass it.
-    pub def send_json_value(self, status: int, v: Pointer[JsonValue]):
-        mut body = Json.stringify(v)
-        HttpConn.send_json(self, status, body)
-        # `body` is a fresh str created here and used only as the send_json arg
-        # (the compiler excludes call-arg strings from auto-drop), so releasing
-        # it here is the framework's job — sound because this is its last use.
-        # (codegen rewrites `_tr_c_free(str ...)` to refcounted release.)
-        unsafe: _tr_c_free(body as Pointer[char])
-        v.read().dispose()
-        unsafe: _tr_c_free(v as Pointer[char])
-
     # Send a streaming-built JSON response. The handler writes directly into the
-    # JsonWriter (no intermediate JsonValue tree — ~30x cheaper for multi-row
-    # arrays). The body is copied into the wire buffer by _send_simple here;
-    # then the writer is freed explicitly below.
+    # JsonWriter (no intermediate tree — zero per-value heap allocation). The body
+    # is copied into the wire buffer by _send_simple here; the writer is freed
+    # explicitly below.
     #
-    # Why w.free() here and not in the caller: Tauraro's `mark_coll_arg` rule
-    # marks every user-defined class instance that appears in a non-receiver
-    # call-argument position as `coll_escaped`, which suppresses the caller's
-    # auto-drop. So a caller like `c.send_json_writer(200, w)` never emits
-    # `JsonWriter_free(w)` at scope exit — without the explicit free here the
-    # writer (StringBuilder + Vec[bool] + struct, ~200-700 B) leaks on every
-    # request. No double-free risk: the caller's auto-drop is definitively off.
+    # Why w.free() here and not in the caller: Tauraro's `mark_coll_arg` rule marks
+    # every user-defined class instance passed as a non-receiver call-argument as
+    # `coll_escaped`, suppressing the caller's auto-drop. So `c.send_json_writer(200,
+    # w)` never emits `JsonWriter_free(w)` at scope exit — without the explicit free
+    # here the writer leaks per request. No double-free: the caller's auto-drop is off.
     pub def send_json_writer(self, status: int, w: JsonWriter):
         HttpConn._send_simple(self, status, "application/json", w.view())
         w.free()

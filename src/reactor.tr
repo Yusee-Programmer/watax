@@ -1,3 +1,4 @@
+# @trusted: watax framework core — audited byte-level parsing/reactor (raw-pointer systems code, like hyper/tokio internals).
 # watax reactor — epoll/select-driven event loop for many keep-alive
 # connections per thread, without a thread per connection.
 #

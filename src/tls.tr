@@ -1,3 +1,4 @@
+# @trusted: watax framework core — audited byte-level parsing/reactor (raw-pointer systems code, like hyper/tokio internals).
 # watax server-side TLS (HTTPS) — thread-per-connection over OpenSSL.
 #
 #   app.listen_tls("0.0.0.0", 8443, "cert.pem", "key.pem")
