@@ -45,7 +45,7 @@ def _handle_conn(job: Shared[ConnJob]):
     App._serve_conn(app, conn)
     job.app.unlock()
     job.conn.unlock()
-    conn.dispose()
+
 
 extend App:
     # Bind host:port and run the accept loop, dispatching each connection on

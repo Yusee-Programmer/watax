@@ -270,9 +270,11 @@ def main():
         .on_error(on_error)
 
     print("watax-notes listening on http://" + cfg_host() + ":" + cfg_port().to_str())
-    # Thread-per-connection: the browser holds several connections at once (the
-    # keep-alive page, the WebSocket, the SSE stream). The single-threaded
-    # `listen` would handle them one at a time — so the long-lived WebSocket /
-    # SSE connections would starve everything else. `listen_threaded` gives each
-    # connection its own OS thread.
-    app.listen_threaded(cfg_host(), cfg_port())
+    # Async event loop (epoll/kqueue/WSAPoll) on a single thread — the same model
+    # axum/tokio use: many concurrent keep-alive/WebSocket/SSE connections are each
+    # just one fd in the readiness set, not a blocked OS thread. This is also the
+    # memory-safe default under `--strict`: no per-connection thread shares the
+    # accept-loop's mutable server state, so there is no cross-thread data race to
+    # reason about. (`listen_reactor_pool(host, port, workers)` scales it across a
+    # fixed worker set when the handlers are CPU-bound.)
+    app.listen_reactor(cfg_host(), cfg_port())

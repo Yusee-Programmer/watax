@@ -78,9 +78,11 @@ pub def set_rate_limit(limit: int, window_ms: int):
 
 # Returns true if `key` is still within its quota for the current window
 # (and increments its counter); false if it has been exceeded.
-# `ref str`: key is only read (map lookup), never stored. Elides ARC
-# retain/release under --strict; otherwise behaves identically.
-pub def _rate_allow(key: ref str) -> bool:
+# `key` is OWNED (not `ref`): it is STORED as a Map key on the first request
+# from a peer (`table.insert(key, ...)`), so the Map must take its own copy —
+# a borrowed key would dangle once the caller frees `peer_addr()`, corrupting
+# the table on the next lookup.
+pub def _rate_allow(key: str) -> bool:
     mut now   = Clock.now_ms()
     mut table = _rl_state.get()
     mut ok    = true
