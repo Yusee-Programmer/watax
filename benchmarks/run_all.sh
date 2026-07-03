@@ -272,3 +272,4 @@ fi
 } > "$RESULTS_MD"
 
 printf "\n${GRN}Wrote Markdown report: %s${RST}\n\n" "$RESULTS_MD"
+
