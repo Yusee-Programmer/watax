@@ -28,7 +28,7 @@ extern "C":
     def _tr_tls_accept(ctx: Pointer[char], fd: int) -> Pointer[char]
 
 # Carries an established (post-handshake) TLS connection to a worker thread.
-class TlsJob implements Sendable:
+class TlsJob implements Sendable, UnsafeSendable:
     pub app:  Mutex[App]
     pub conn: Mutex[HttpConn]
 
@@ -39,7 +39,7 @@ extend TlsJob:
         j.conn = Mutex[HttpConn].init(conn)
         return j
 
-def _serve_tls_conn(job: TlsJob):
+def _serve_tls_conn(job: Shared[TlsJob]):
     mut app  = job.app.get()
     mut conn = job.conn.get()
     App._serve_conn(app, conn)
@@ -74,5 +74,6 @@ extend App:
             stream.tls = h
             mut req  = HttpServer.read_next(self._server, stream)
             mut conn = HttpConn.init(req, stream)
-            mut t    = Thread.spawn(_serve_tls_conn, TlsJob.init(self, conn))
+            shared job = TlsJob.init(self, conn)
+            mut t = Thread.spawn(_serve_tls_conn, job.clone())
             t.detach()

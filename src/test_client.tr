@@ -20,7 +20,7 @@ from std.async.mutex import Mutex
 from std.async.send import Sendable
 from app import App
 
-class _TestAppHolder implements Sendable:
+class _TestAppHolder implements Sendable, UnsafeSendable:
     pub app:  Mutex[App]
     pub port: int
 
@@ -31,7 +31,7 @@ extend _TestAppHolder:
         h.port = port
         return h
 
-def _run_test_app(h: _TestAppHolder):
+def _run_test_app(h: Shared[_TestAppHolder]):
     mut app = h.app.get()
     app.listen_reactor("127.0.0.1", h.port)
 
@@ -43,7 +43,8 @@ extend TestClient:
     # thread and return a client for issuing requests against it. Blocks
     # briefly so the listener is bound before the first request is sent.
     pub def start(app: App, port: int) -> TestClient:
-        mut t = Thread.spawn(_run_test_app, _TestAppHolder.init(app, port))
+        shared h = _TestAppHolder.init(app, port)
+        mut t = Thread.spawn(_run_test_app, h.clone())
         t.detach()
         Thread.sleep(50)
         mut tc = TestClient()

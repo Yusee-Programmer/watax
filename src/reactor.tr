@@ -102,7 +102,7 @@ extend RConn:
 
 # One reactor worker: its own IOPoll + connection table, sharing the App's
 # (read-only) route table and one listening socket with the other workers.
-class ReactorWorker implements Sendable:
+class ReactorWorker implements Sendable, UnsafeSendable:
     pub app:      Mutex[App]
     pub listener: Mutex[TcpListener]
 
@@ -117,7 +117,7 @@ extend ReactorWorker:
 # poll set (never a valid socket fd).
 def _listener_ud() -> int: return -1
 
-def _reactor_run(w: ReactorWorker):
+def _reactor_run(w: Shared[ReactorWorker]):
     mut app      = w.app.get()
     mut listener = w.listener.get()
 
@@ -207,7 +207,9 @@ extend App:
         print("watax listening (reactor, " + workers.to_str() + " workers) on http://" + host + ":" + port.to_str())
         mut i = 1
         while i < workers:
-            mut t = Thread.spawn(_reactor_run, ReactorWorker.init(self, self._server._listener))
+            shared rw = ReactorWorker.init(self, self._server._listener)
+            mut t = Thread.spawn(_reactor_run, rw.clone())
             t.detach()
             i = i + 1
-        _reactor_run(ReactorWorker.init(self, self._server._listener))
+        shared rw0 = ReactorWorker.init(self, self._server._listener)
+        _reactor_run(rw0)

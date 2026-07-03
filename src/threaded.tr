@@ -22,7 +22,13 @@ from app import App
 # both hold non-Sendable fields (Vec, raw stream handles), so the Sendable
 # check requires them wrapped in Mutex to cross the Thread.spawn boundary.
 # Each Mutex is locked exactly once by the worker and never contended.
-class ConnJob implements Sendable:
+# `UnsafeSendable` is the framework's AUDITED unsafe-core assertion (Tauraro's
+# `unsafe impl Send/Sync`): the App is read-only once `listen*` runs, and each
+# HttpConn is exclusively owned by the one worker that serves it, so sharing them
+# across the spawn is safe even though they hold non-atomic internals. The JOB
+# itself is `Shared[ConnJob]` (atomic Arc) so the cross-thread handoff of the job
+# handle races nothing — the actual soundness fix.
+class ConnJob implements Sendable, UnsafeSendable:
     pub app:  Mutex[App]
     pub conn: Mutex[HttpConn]
 
@@ -33,12 +39,13 @@ extend ConnJob:
         j.conn = Mutex[HttpConn].init(conn)
         return j
 
-def _handle_conn(job: ConnJob):
+def _handle_conn(job: Shared[ConnJob]):
     mut app  = job.app.get()
     mut conn = job.conn.get()
     App._serve_conn(app, conn)
     job.app.unlock()
     job.conn.unlock()
+    conn.dispose()
 
 extend App:
     # Bind host:port and run the accept loop, dispatching each connection on
@@ -53,8 +60,8 @@ extend App:
         print("watax listening (threaded) on http://" + host + ":" + port.to_str())
         while self._server.is_running():
             mut conn = self._server.accept()
-            mut job  = ConnJob.init(self, conn)
-            mut t    = Thread.spawn(_handle_conn, job)
+            shared job = ConnJob.init(self, conn)   # atomic Arc job handle
+            mut t = Thread.spawn(_handle_conn, job.clone())
             t.detach()
 
 # `App.listen_pooled` shares a single Mutex-wrapped App handle (read-only
@@ -63,7 +70,7 @@ extend App:
 # listening socket are a standard, OS-supported pattern, so no connection
 # queue is needed: this caps in-flight requests at `workers` (a bounded,
 # production-safer alternative to the unbounded `listen_threaded`).
-class PoolWorker implements Sendable:
+class PoolWorker implements Sendable, UnsafeSendable:
     pub app: Mutex[App]
 
 extend PoolWorker:
@@ -72,7 +79,7 @@ extend PoolWorker:
         w.app = Mutex[App].init(app)
         return w
 
-def _pool_worker(w: PoolWorker):
+def _pool_worker(w: Shared[PoolWorker]):
     mut app = w.app.get()
     while app._server.is_running():
         mut conn = app._server.accept()
@@ -93,7 +100,9 @@ extend App:
         # running); the calling thread serves as worker #0 and blocks here.
         mut i = 1
         while i < workers:
-            mut t = Thread.spawn(_pool_worker, PoolWorker.init(self))
+            shared pw = PoolWorker.init(self)
+            mut t = Thread.spawn(_pool_worker, pw.clone())
             t.detach()
             i = i + 1
-        _pool_worker(PoolWorker.init(self))
+        shared pw0 = PoolWorker.init(self)
+        _pool_worker(pw0)
