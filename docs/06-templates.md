@@ -120,4 +120,4 @@ concatenating raw strings in your handler.
 Use templates for **server-rendered HTML**: marketing pages, dashboards, admin
 panels, forms, anything where the server produces the markup. For pure JSON
 APIs consumed by a separate frontend, skip templates and use
-[`send_json_value`](04-responses.md#json--two-ways).
+[`send_json_writer`](04-responses.md#json--two-ways).

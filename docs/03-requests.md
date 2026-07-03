@@ -54,24 +54,26 @@ HTML forms.
 
 ## JSON bodies — `request.json()`
 
-Parse the body into a `JsonValue` tree:
+Parse the body into a `JsonDoc` (a zero-copy arena) and read it through `root()`:
 
 ```tauraro
-from std.encoding.json import JsonValue
+from std.encoding.json import JsonWriter
 
 def create_user(c: HttpConn):
     if not c.request.is_json():
         c.abort(415, "expected JSON")
         return
-    mut body = c.request.json()                 # Pointer[JsonValue]
-    mut name = body.read().obj_get("name").read().get_str()
-    c.send_json_value(200, make_user(name))     # owns + frees the response tree
-    body.read().dispose()                       # free the parsed request tree
+    mut v = c.request.json()                    # -> JsonDoc (auto-dropped)
+    mut name = v.root().obj_get("name").get_str()
+    mut w = JsonWriter.init(64)
+    w.begin_object(); w.field_str("name", name); w.end_object()
+    c.send_json_writer(200, w)                  # owns + frees the writer
 ```
 
-> The **parsed request** tree is yours to dispose; the **response** tree you
-> pass to `send_json_value` is owned and freed by watax. See [JSON](08-json.md)
-> and [Memory model](13-memory.md).
+> The **parsed request** `JsonDoc` is auto-dropped when the handler returns (no
+> `dispose()`); `get_str()` gives you an owned copy that outlives it. The
+> **`JsonWriter`** you pass to `send_json_writer` is owned and freed by watax. See
+> [JSON](08-json.md) and [Memory model](13-memory.md).
 
 **Perfect for**: JSON APIs and SPA backends.
 

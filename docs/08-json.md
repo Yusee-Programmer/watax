@@ -1,105 +1,127 @@
 # JSON
 
-watax uses Tauraro's `std.encoding.json`. You build a `JsonValue` tree, and for
-responses you hand it to `send_json_value`, which serializes, sends, **and frees
-the whole tree** — your handler frees nothing.
+watax uses Tauraro's zero-copy `std.encoding.json`. You build responses with a
+streaming **`JsonWriter`**, and you read request bodies through a **`JsonDoc`**
+arena via borrowed **`JsonRef`** views. There are **no raw pointers** and nothing to
+`free` in your handler — the writer is released by `send_json_writer`, and the parsed
+`JsonDoc` is auto-dropped at the end of the handler.
 
-## Building values
+## Sending JSON — `JsonWriter`
 
-```tauraro
-from std.encoding.json import JsonValue
-
-mut s = JsonValue.init_str("hello")
-mut n = JsonValue.init_int(42)
-mut f = JsonValue.init_float(3.14)
-mut b = JsonValue.init_bool(true)
-mut z = JsonValue.init_null()
-```
-
-## Objects
+`JsonWriter` streams directly into a growable buffer (no intermediate tree, no
+per-node allocation). Hand it to `c.send_json_writer(status, w)`, which serializes,
+sends, **and frees the writer** for you.
 
 ```tauraro
-mut user = JsonValue.init_object()
-user.read().obj_set("id", JsonValue.init_int(42))
-user.read().obj_set("name", JsonValue.init_str("Ada"))
-user.read().obj_set("admin", JsonValue.init_bool(false))
-```
+from std.encoding.json import JsonWriter
 
-> `init_object()` returns a `Pointer[JsonValue]`, so call methods through
-> `.read()` (e.g. `user.read().obj_set(...)`).
-
-## Arrays
-
-```tauraro
-mut tags = JsonValue.init_array()
-tags.read().push(JsonValue.init_str("web"))
-tags.read().push(JsonValue.init_str("fast"))
-
-mut doc = JsonValue.init_object()
-doc.read().obj_set("tags", tags)        # nest arrays/objects freely
-```
-
-## Sending JSON (recommended)
-
-```tauraro
 def get_user(c: HttpConn):
-    mut o = JsonValue.init_object()
-    o.read().obj_set("id", JsonValue.init_int(42))
-    o.read().obj_set("name", JsonValue.init_str("Ada"))
-    c.send_json_value(200, o)        # serialize + send + free the whole tree
+    mut w = JsonWriter.init(64)          # starting capacity in bytes
+    w.begin_object()
+    w.field_int("id", 42)
+    w.field_str("name", "Ada")
+    w.field_bool("admin", false)
+    w.end_object()
+    c.send_json_writer(200, w)           # send + free the writer
 ```
 
-**No `dispose`/`free` in your handler.** `send_json_value` owns the value tree
-and the serialized string, and releases both. This is the leak-proof path.
+**No `dispose`/`free` in your handler.** `send_json_writer` owns the writer and the
+serialized bytes and releases both — the leak-proof path.
 
-## Reading request JSON
+### Flat objects, the quick way
+
+`field_int` / `field_str` / `field_bool` write a key and value in one call:
 
 ```tauraro
-def update(c: HttpConn):
-    mut body = c.request.json()                       # Pointer[JsonValue]
-    mut name = body.read().obj_get("name").read().get_str()
-    mut age  = body.read().obj_get("age").read().get_int()
-    # ... use name/age ...
-    body.read().dispose()                             # free the parsed tree
+def healthz(c: HttpConn):
+    mut w = JsonWriter.init(32)
+    w.begin_object()
+    w.field_str("status", "ok")
+    w.field_int("notes", store_len())
+    w.end_object()
+    c.send_json_writer(200, w)
+```
+
+### Nested objects and arrays
+
+Use the explicit `begin_*` / `end_*` + `key` / value calls:
+
+```tauraro
+mut w = JsonWriter.init(128)
+w.begin_object()
+    w.key("user"); w.begin_object()
+        w.field_str("name", "Ada")
+        w.field_int("id", 42)
+    w.end_object()
+    w.key("tags"); w.begin_array()
+        w.str_val("web"); w.str_val("fast")
+    w.end_array()
+w.end_object()
+c.send_json_writer(200, w)
+# {"user":{"name":"Ada","id":42},"tags":["web","fast"]}
+```
+
+Writer methods: `begin_object`/`end_object`, `begin_array`/`end_array`, `key(name)`,
+`int_val`/`str_val`/`bool_val`/`null_val`, and the one-shot `field_int`/`field_str`/
+`field_bool`. (See the [std.encoding docs](https://github.com/Yusee-Programmer/tauraro)
+for the full reference.)
+
+## Reading request JSON — `JsonDoc` / `JsonRef`
+
+`c.request.json()` parses the request body into a `JsonDoc` arena. Navigate it with
+`root()` and the borrowed `JsonRef` accessors. The doc is **auto-dropped** when the
+handler returns — no `dispose()` call.
+
+```tauraro
+def create_note(c: HttpConn):
+    mut v = c.request.json()                     # -> JsonDoc
+    if not v.root().is_object():
+        c.abort(400, "{\"error\":\"expected a JSON object\"}")
+        return
+    mut title = v.root().obj_get("title").get_str()   # owned copy
+    mut body  = v.root().obj_get("body").get_str()
+    if v.root().obj_has("draft") and v.root().obj_get("draft").get_bool():
+        ...
+    store_add(title, body)
     c.send_status(204)
 ```
 
-Useful readers:
+Useful `JsonRef` readers:
 
 | Method | Returns |
 |--------|---------|
-| `v.read().obj_get(key)` | child value (a `null` value if absent) |
-| `v.read().obj_has(key)` | whether a key exists |
-| `v.read().get_str()` / `get_int()` / `get_float()` / `get_bool()` | the scalar |
-| `v.read().is_object()` / `is_array()` / `is_str()` / … | type checks |
-| `v.read().array_len()` / `array_get(i)` | array access |
-| `v.read().to_str()` / `to_pretty(2)` | serialize to a string |
+| `root()` | the top-level `JsonRef` of the parsed doc |
+| `obj_get(key)` | child value (a non-existent ref if absent) |
+| `obj_has(key)` | whether a key exists |
+| `get_str()` / `get_int()` / `get_float()` / `get_bool()` | the scalar (`get_str` is an owned copy) |
+| `str_view()` / `str_eq(s)` | zero-copy string view / compare, **no allocation** |
+| `is_object()` / `is_array()` / `is_str()` / `exists()` / … | type / presence checks |
+| `array_len()` / `array_get(i)` | array access |
+| `to_str()` | re-serialize this node to a compact string |
 
-## Ownership rules (important)
+### Zero-copy reads on hot paths
 
-- **Responses are framework-owned.** Anything you pass to `send_json_value` is
-  serialized and freed by watax — don't `dispose` it yourself.
-- **Parsed requests are yours.** `request.json()` allocates a tree you own;
-  call `.dispose()` when finished.
-- **Children belong to their parent.** Once you `obj_set`/`push` a child into a
-  parent, disposing the parent frees the child too — never dispose a child you
-  already added.
+When you only need to *test* a value (routing, validation), `str_view()` avoids
+allocating a string entirely:
 
-These rules mean a typical handler has exactly **one** `dispose` (for a parsed
-request) and **zero** `free` calls. See [Memory model](13-memory.md).
+```tauraro
+if c.request.json().root().obj_get("op").str_eq("ping"):
+    c.send_status(200)
+```
 
-## Best practices
+## Ownership rules (short version)
 
-- **Prefer `send_json_value`** over `send_json` with a hand-built string — no
-  manual escaping, no leaks.
-- **Build the tree, then hand it off.** Don't keep references to a tree after
-  passing it to `send_json_value`.
-- **Dispose parsed request trees** exactly once.
-- For very hot endpoints returning a constant shape, a precomputed string with
-  `send_json` is fine — just remember watax frees a fresh response string.
+- **Responses are framework-owned.** The `JsonWriter` you pass to
+  `send_json_writer` is freed by watax — never `free()` it yourself.
+- **Parsed requests are auto-managed.** The `JsonDoc` from `request.json()` and any
+  `JsonRef` borrowed from it are reclaimed automatically when the handler returns.
+  `get_str()` returns an *owned* copy, so it's safe to keep after the doc drops.
+
+The result: a typical JSON handler has **zero** `free`/`dispose` calls. See
+[Memory model](13-memory.md).
 
 ## When JSON is perfect
 
-`send_json_value` is the default for any API returning structured data. Use
-templates instead when you're producing HTML, and chunked/SSE responses when the
+`JsonWriter` + `send_json_writer` is the default for any API returning structured
+data. Use [templates](06-templates.md) for HTML, and chunked/SSE responses when the
 payload is huge or streamed.

@@ -11,24 +11,24 @@ per-request leak.
 |------------|----------|--------|
 | `str` / collection **locals** in a handler | the compiler (auto-drop at scope exit) | nothing |
 | A response body you pass to `send_text`/`send_json`/… | watax (`HttpResponse.dispose`) | nothing |
-| A `JsonValue` you pass to `send_json_value` | watax (serialize → send → dispose tree) | nothing |
-| A parsed **request** tree from `request.json()` | **you** | `body.read().dispose()` |
+| A `JsonWriter` you pass to `send_json_writer` | watax (serialize → send → free writer) | nothing |
+| A parsed **request** `JsonDoc` from `request.json()` | the compiler (auto-drop at scope exit) | nothing |
 | A parsed **multipart** form from `request.multipart()` | **you** | `form.dispose()` |
 
-So a typical handler has **zero `free` calls** and **at most one `dispose`** (for
-something it *parsed* from the request).
+So a typical JSON handler has **zero `free`/`dispose` calls**. The only thing you
+still dispose is a parsed **multipart** form.
 
 ```tauraro
 def create(c: HttpConn):
-    mut body = c.request.json()                 # you own this -> dispose it
-    mut name = body.read().obj_get("name").read().get_str()
+    mut v    = c.request.json()                 # JsonDoc — auto-dropped
+    mut name = v.root().obj_get("name").get_str()   # get_str() is an owned copy
 
-    mut out = JsonValue.init_object()           # framework will own this
-    out.read().obj_set("name", JsonValue.init_str(name))
-    out.read().obj_set("created", JsonValue.init_bool(true))
-    c.send_json_value(201, out)                 # serialize + send + free tree
-
-    body.read().dispose()                       # free what you parsed
+    mut w = JsonWriter.init(64)                 # watax will own + free this
+    w.begin_object()
+    w.field_str("name", name)
+    w.field_bool("created", true)
+    w.end_object()
+    c.send_json_writer(201, w)                  # serialize + send + free writer
 ```
 
 ## How it works
@@ -37,10 +37,13 @@ def create(c: HttpConn):
   locals at the end of their scope across all tractable control-flow forms — so
   request-scoped strings and lists vanish when the handler returns.
 - **Owning response APIs.** `HttpResponse.dispose()` releases the response body
-  it retained, and `send_json_value` disposes the entire `JsonValue` tree plus
-  the serialized string. The leak that used to exist on the JSON path (each
+  it retained, and `send_json_writer` frees the `JsonWriter` (its buffer and
+  the serialized string). The leak that used to exist on the JSON path (each
   fresh response body's reference was never released) is fixed at this layer, so
   **every** watax app benefits — not just ones that remembered to free.
+- **Zero-copy JSON reads.** `request.json()` returns a `JsonDoc` arena that is
+  auto-dropped when the handler returns; `JsonRef`/`StrView` borrow from it with no
+  allocation, and `get_str()` gives you an owned copy when you need to keep a value.
 
 ## Why "framework owns it" matters
 
@@ -57,8 +60,8 @@ These are advanced/low-level and almost never appear in handler code:
 - **Raw `unsafe` buffers** (e.g. hand-allocated byte buffers via `alloc[]`):
   whoever allocates frees. This is the point of `unsafe`.
 - **`Pointer[T]` heap structs** you build by hand and *don't* hand to an owning
-  API: dispose/free them yourself. (`JsonValue` you pass to `send_json_value` is
-  handled for you; one you build and keep is yours.)
+  API: dispose/free them yourself. (A `JsonWriter` you pass to `send_json_writer`
+  is handled for you.)
 
 If you find yourself writing `free`/`dispose` in a handler beyond the single
 request-parse case, that's a signal the framework should grow an owning API —
@@ -73,9 +76,9 @@ flat is the contract.
 
 ## Best practices
 
-- **Build a `JsonValue`, hand it to `send_json_value`** — don't dispose it.
-- **Dispose what you parse** (`request.json()`, `request.multipart()`) exactly
-  once.
+- **Build a `JsonWriter`, hand it to `send_json_writer`** — don't free it.
+- **Dispose a parsed multipart form** (`request.multipart()`) once. A parsed
+  `request.json()` `JsonDoc` is auto-dropped — nothing to do.
 - **Don't reach for `_tr_c_free`/`dispose` in handlers** otherwise; if you think
   you need to, prefer an owning framework API.
 - **Load-test new endpoints** and confirm peak memory is flat.

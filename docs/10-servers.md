@@ -23,13 +23,26 @@ app.listen_reactor_pool("127.0.0.1", 8080, 4)   # 4 reactor workers
 
 A pool of event-loop workers, each multiplexing many connections with the
 platform's best readiness primitive (epoll on Linux, kqueue on macOS/BSD,
-WSAPoll on Windows). This is the path the [benchmarks](../benchmarks/) exercise:
-throughput on par with Rust (axum/hyper) and a flat memory footprint.
+WSAPoll on Windows). Crucially, **each worker runs its own independent reactor
+over its own connection table** — no mutable state is shared between workers, so
+it is data-race-free and compiles under `--strict`. This is the path the
+[benchmarks](../benchmarks/) exercise: throughput on par with Rust (axum/hyper)
+and a flat memory footprint.
 
 - **Pick `workers` ≈ CPU cores** for CPU-bound handlers; a bit higher if
   handlers do blocking I/O.
 - **Perfect for**: production HTTP/JSON APIs, high connection counts, keep-alive
   heavy traffic.
+
+> **Thread-safety note (important).** The **reactor** modes (`listen_reactor`,
+> `listen_reactor_pool`) are the recommended and `--strict`-safe way to serve
+> concurrently — a worker never shares mutable server state with another. The
+> thread-per-connection / worker-pool modes below (`listen_threaded`,
+> `listen_pooled`, `listen_async`) are known to share accept-loop server state
+> across threads and can race under heavy concurrent load; treat them as
+> convenience modes for low/moderate traffic, and prefer a reactor for anything
+> production-facing. (Hardening those modes for per-connection isolation is
+> tracked framework work.)
 
 ## `listen_threaded`
 
@@ -38,12 +51,14 @@ app.listen_threaded("127.0.0.1", 8080)
 ```
 
 Spawns a thread per accepted connection. Simple mental model; fine when handlers
-block (e.g. synchronous DB calls) and concurrency is moderate.
+block (e.g. synchronous DB calls) and concurrency is **modest**.
 
 - **Perfect for**: internal tools, admin panels, apps with blocking handlers and
-  modest traffic.
-- **Watch out**: thread-per-connection doesn't scale to tens of thousands of
-  idle keep-alive connections — use a reactor for that.
+  low traffic.
+- **Watch out**: thread-per-connection doesn't scale to tens of thousands of idle
+  keep-alive connections, and it shares accept-loop state across worker threads
+  (see the thread-safety note above) — use `listen_reactor_pool` for concurrent
+  production traffic.
 
 ## `listen` / `listen_reactor` (single core)
 

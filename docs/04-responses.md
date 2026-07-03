@@ -33,23 +33,25 @@ c.send_json(200, "{\"ok\": true}")
 Use when you already have a JSON string. **The string you pass is freed by the
 framework** if it's a fresh allocation owned only by this call.
 
-### From a `JsonValue` (recommended)
+### With a `JsonWriter` (recommended)
 
-Build a tree and hand it over — watax serializes, sends, and **frees the whole
-tree plus the serialized string** for you:
+Stream the response with a `JsonWriter` and hand it over — watax serializes, sends,
+and **frees the writer** for you:
 
 ```tauraro
-from std.encoding.json import JsonValue
+from std.encoding.json import JsonWriter
 
 def user(c: HttpConn):
-    mut o = JsonValue.init_object()
-    o.read().obj_set("id", JsonValue.init_int(42))
-    o.read().obj_set("name", JsonValue.init_str("Ada"))
-    c.send_json_value(200, o)        # no dispose/free needed in your handler
+    mut w = JsonWriter.init(64)
+    w.begin_object()
+    w.field_int("id", 42)
+    w.field_str("name", "Ada")
+    w.end_object()
+    c.send_json_writer(200, w)        # no dispose/free needed in your handler
 ```
 
 **Perfect for**: any structured JSON. It's the leak-proof, zero-ceremony path —
-your handler never calls `dispose`/`free`. See [JSON](08-json.md).
+your handler never calls `free`. See [JSON](08-json.md).
 
 ## Templates
 
@@ -97,7 +99,7 @@ Set headers that apply to the next response on this connection:
 ```tauraro
 c.set_resp_header("Cache-Control", "no-store")
 c.set_resp_header("X-Request-Id", req_id)
-c.send_json_value(200, payload)
+c.send_json_writer(200, w)
 ```
 
 ## Streaming (chunked transfer-encoding)
@@ -142,7 +144,7 @@ one-way alternative to WebSockets when the server only *pushes*.
 |-----------------|-----|
 | A short string | `send_text` |
 | An HTML page | `send_html` or `send_template` |
-| Structured data | `send_json_value` (build a `JsonValue`) |
+| Structured data | `send_json_writer` (stream a `JsonWriter`) |
 | Just a status | `send_status` / `abort` |
 | A location change | `redirect` |
 | A large/unknown-length body | `begin_chunked` / `write_chunk` / `end_chunked` |
@@ -154,7 +156,7 @@ one-way alternative to WebSockets when the server only *pushes*.
 - **Send exactly once per handler.** A handler should call one terminal
   `send_*` (or run a streaming sequence). Returning without sending yields an
   empty `200`; guard branches so every path responds.
-- **Prefer `send_json_value`** over hand-built JSON strings — it's both safer
+- **Prefer `send_json_writer`** over hand-built JSON strings — it's both safer
   (no manual escaping) and leak-proof.
 - **Stream big bodies.** Don't materialize multi-MB strings; use chunked
   responses.

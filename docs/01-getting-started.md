@@ -92,7 +92,7 @@ def show_user(c: HttpConn):
 
 `c.request` is the parsed request (method, path, params, query, body, headers,
 cookies). `c` itself carries the response helpers (`send_text`, `send_json`,
-`send_html`, `send_json_value`, `redirect`, …). Everything you allocate in a
+`send_html`, `send_json_writer`, `redirect`, …). Everything you allocate in a
 handler — strings, JSON trees, collections — is freed automatically when the
 handler returns. See [Memory model](13-memory.md).
 

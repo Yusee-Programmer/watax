@@ -21,7 +21,7 @@ right tool for the job.
 5. [Middleware](05-middleware.md) — before/after hooks, CORS, rate limit, sessions.
 6. [Templates](06-templates.md) — templa rendering, layouts, escaping.
 7. [Static files & uploads](07-static-files.md) — serving assets, SPA fallback, multipart.
-8. [JSON](08-json.md) — building/reading `JsonValue`, ownership, `send_json_value`.
+8. [JSON](08-json.md) — writing with `JsonWriter`, reading with `JsonDoc`/`JsonRef`, `send_json_writer`.
 9. [WebSockets](09-websockets.md) — RFC 6455 upgrade, echo loop, vs SSE.
 10. [Servers & deployment](10-servers.md) — the `listen_*` strategies, which to use when.
 11. [Configuration](11-configuration.md) — `Config.from_env()` and env vars.
@@ -34,15 +34,15 @@ right tool for the job.
 ```tauraro
 from watax import App
 from std.net.http_server import HttpConn
-from std.encoding.json import JsonValue
+from std.encoding.json import JsonWriter
 
 def hello(c: HttpConn):
     c.send_text(200, "Hello, World!")
 
 def user(c: HttpConn):
-    mut o = JsonValue.init_object()
-    o.read().obj_set("id", JsonValue.init_int(42))
-    c.send_json_value(200, o)          # watax frees the whole tree
+    mut w = JsonWriter.init(64)
+    w.begin_object(); w.field_int("id", 42); w.end_object()
+    c.send_json_writer(200, w)          # watax frees the writer
 
 def main():
     mut app = App.new()
@@ -52,5 +52,6 @@ def main():
 ```
 
 > **Golden rule (memory):** build it and hand it to a `send_*` → watax frees it;
-> parse it from the request → you `dispose()` it once; everything else is
-> auto-freed. See [Memory model](13-memory.md).
+> parse it from the request → it's auto-dropped when the handler returns;
+> everything else is auto-freed. Handlers call **no** `free`/`dispose`. See
+> [Memory model](13-memory.md).
