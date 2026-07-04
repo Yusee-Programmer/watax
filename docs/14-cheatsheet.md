@@ -91,11 +91,9 @@ mut codec = SessionCodec.init("secret"); codec.encode(v); codec.decode(signed)
 ## Servers
 
 ```tauraro
-app.listen("127.0.0.1", 8080)                       # simplest
-app.listen_threaded("127.0.0.1", 8080)              # thread per conn
-app.listen_pooled("127.0.0.1", 8080, 4)             # thread pool
-app.listen_reactor("127.0.0.1", 8080)               # single event loop
-app.listen_reactor_pool("127.0.0.1", 8080, 4)       # reactor pool (default)
+app.listen("127.0.0.1", 8080)                       # simplest (single-threaded)
+app.listen_reactor("127.0.0.1", 8080)               # single event loop, one core
+app.listen_reactor_pool("127.0.0.1", 8080, 4)       # reactor pool (default, concurrent)
 app.listen_tls("0.0.0.0", 8443, "cert.pem", "key.pem")   # needs -DTAURARO_TLS_OPENSSL
 ```
 

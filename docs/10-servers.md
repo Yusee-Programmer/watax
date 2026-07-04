@@ -8,9 +8,6 @@ model — pick based on your workload. All take a host and port.
 | Method | Model | Best for |
 |--------|-------|----------|
 | `listen(host, port)` | single-threaded accept loop | dev, tools, lowest concurrency |
-| `listen_threaded(host, port)` | one OS thread per connection | moderate concurrency, blocking handlers |
-| `listen_pooled(host, port, workers)` | fixed thread pool | bounded threads, steady load |
-| `listen_async(host, port, workers)` | worker pool (async dispatch) | mixed workloads |
 | `listen_reactor(host, port)` | single-thread event loop (epoll/kqueue/WSAPoll) | many idle keep-alive conns, one core |
 | **`listen_reactor_pool(host, port, workers)`** | **reactor per worker** | **maximum throughput — the default** |
 | `listen_tls(host, port, cert, key)` | TLS termination | HTTPS (needs `-DTAURARO_TLS_OPENSSL`) |
@@ -34,31 +31,14 @@ and a flat memory footprint.
 - **Perfect for**: production HTTP/JSON APIs, high connection counts, keep-alive
   heavy traffic.
 
-> **Thread-safety note (important).** The **reactor** modes (`listen_reactor`,
-> `listen_reactor_pool`) are the recommended and `--strict`-safe way to serve
-> concurrently — a worker never shares mutable server state with another. The
-> thread-per-connection / worker-pool modes below (`listen_threaded`,
-> `listen_pooled`, `listen_async`) are known to share accept-loop server state
-> across threads and can race under heavy concurrent load; treat them as
-> convenience modes for low/moderate traffic, and prefer a reactor for anything
-> production-facing. (Hardening those modes for per-connection isolation is
-> tracked framework work.)
+> **Why only these modes.** watax serves concurrently **only** via the reactor
+> (`listen_reactor` / `listen_reactor_pool`): each worker runs its own reactor over
+> its own connection table, so no mutable server state is shared between threads —
+> data-race-free and `--strict`-clean by construction. The earlier thread-per-
+> connection / worker-pool modes (`listen_threaded`, `listen_pooled`, `listen_async`)
+> were **removed**: they shared the accept-loop's server state across threads and
+> raced under load. Use `listen` for single-threaded, a reactor for concurrency.
 
-## `listen_threaded`
-
-```tauraro
-app.listen_threaded("127.0.0.1", 8080)
-```
-
-Spawns a thread per accepted connection. Simple mental model; fine when handlers
-block (e.g. synchronous DB calls) and concurrency is **modest**.
-
-- **Perfect for**: internal tools, admin panels, apps with blocking handlers and
-  low traffic.
-- **Watch out**: thread-per-connection doesn't scale to tens of thousands of idle
-  keep-alive connections, and it shares accept-loop state across worker threads
-  (see the thread-safety note above) — use `listen_reactor_pool` for concurrent
-  production traffic.
 
 ## `listen` / `listen_reactor` (single core)
 
@@ -109,7 +89,6 @@ console signal.)
 Need HTTPS in-process?                      -> listen_tls
 Tens of thousands of keep-alive conns?      -> listen_reactor_pool
 Production HTTP/JSON API?                    -> listen_reactor_pool (default)
-Handlers block on sync I/O, modest traffic? -> listen_threaded
 One core / sidecar / low traffic?           -> listen_reactor or listen
 Just developing locally?                     -> listen
 ```

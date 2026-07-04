@@ -199,31 +199,6 @@ extend App:
             mut conn = self._server.accept()
             App._serve_conn(self, conn)
 
-    # Async serving: green-thread, non-blocking I/O. `workers` OS threads each
-    # run their own cooperative scheduler + reactor (thread-per-core), and every
-    # connection is handled on its own lightweight green thread doing async I/O.
-    # The existing route/middleware/dispatch path is reused unchanged - accepted
-    # streams are put in async_mode so their recv()/send() park on the reactor
-    # instead of blocking an OS thread. Scales to many concurrent connections.
-    pub def listen_async(self, host: str, port: int, workers: int):
-        self._server = HttpServer.init(host, port)
-        App._configure_server(self)
-        if not self._server.start():
-            print("watax: failed to bind " + host + ":" + port.to_str())
-            return
-        self._server._listener.set_nonblocking()
-        mut lfd: int = self._server._listener.fd
-        print("watax listening (async, " + workers.to_str() + " workers) on http://" + host + ":" + port.to_str())
-        # Publish the App for the worker green threads, then start the workers.
-        # (self is consumed by this assignment; everything needed from it has
-        # already been read above.)
-        _WAX_APP = self
-        mut i = 1
-        while i < workers:
-            mut t = Thread.spawn(_wax_worker, lfd)
-            i = i + 1
-        _wax_worker(lfd)
-
     # Serve one or more HTTP/1.1 keep-alive requests on a single TCP
     # connection: dispatch the already-read request, then keep reading and
     # dispatching further requests off the same stream until the client (or
@@ -298,55 +273,3 @@ extend App:
                 return
             i = i + 1
         App._send_error(self, conn, 404)
-
-# ── Async serving internals (green-thread, reactor-driven) ──────────────────
-# The App being served asynchronously, shared by all worker threads (one server
-# per process). Set by App.listen_async before any worker starts.
-mut _WAX_APP: App = App.new()
-
-# Reconstruct a connected, async-mode TcpStream from an accepted fd. async_mode
-# makes recv()/send() park on the reactor, so the normal dispatch path is async.
-def _wax_make_stream(fd: int) -> TcpStream:
-    mut s = TcpStream()
-    s.fd          = fd
-    s.connected   = true
-    s.nonblocking = true
-    s.async_mode  = true
-    s.host        = ""
-    s.port        = 0
-    s._wb         = false
-    return s
-
-# Per-connection green thread: read the first request, then run the shared
-# keep-alive dispatch loop (all I/O cooperative via async_mode).
-def _wax_conn_handler(arg: Pointer[char]):
-    mut fd: int = 0
-    unsafe: fd = arg as int
-    mut stream = _wax_make_stream(fd)
-    mut req = HttpServer.read_next(_WAX_APP._server, stream)
-    if Str.len(req.method) == 0:
-        stream.close()
-        return
-    mut conn = HttpConn.init(req, stream)
-    App._serve_conn(_WAX_APP, conn)
-
-# Accept loop (green thread): one green thread per accepted connection.
-def _wax_accept_loop(arg: Pointer[char]):
-    mut lfd: int = 0
-    unsafe: lfd = arg as int
-    mut listener = TcpListener()
-    listener.fd        = lfd
-    listener.listening = true
-    listener.host      = ""
-    listener.port      = 0
-    while true:
-        mut s: TcpStream = listener.accept_nb()
-        if s.fd >= 0:
-            unsafe: Coro.spawn(_wax_conn_handler as Pointer[char], s.fd as Pointer[char])
-        else:
-            Coro.await_readable(lfd)
-
-# One worker OS thread: its own scheduler + reactor over the shared listener.
-def _wax_worker(lfd: int):
-    unsafe: Coro.spawn(_wax_accept_loop as Pointer[char], lfd as Pointer[char])
-    Coro.run()

@@ -12,10 +12,10 @@
 #
 # What this does NOT do (yet): true async handlers. Once a full request is
 # buffered, the route handler runs synchronously to completion on the
-# worker's thread (same as `listen_pooled`) - fine for the fast, CPU-light
+# worker's thread - fine for the fast, CPU-light
 # handlers typical of a JSON/HTML API. A handler that blocks for a long time
 # (slow upstream call, big file I/O) will stall that worker's other
-# connections; use `listen_threaded` for those workloads instead.
+# connections; run a slow handler on its own thread if needed.
 
 from std.io.poll import IOPoll, IOEvent
 from std.net.tcp import TcpStream, TcpListener

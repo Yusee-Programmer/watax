@@ -8,12 +8,12 @@
 # stubs and listen_tls() reports that TLS is unavailable and returns.
 #
 # TLS uses BLOCKING OpenSSL I/O (SSL_accept/read/write), so each connection is
-# served on its own OS thread (like listen_threaded) - a blocked TLS read only
+# served on its own OS thread - a blocked TLS read only
 # stalls its own connection. The accept loop performs the handshake, then hands
 # the established connection to a worker thread for request dispatch.
 #
 # For very high connection counts, terminating TLS at a reverse proxy
-# (nginx/caddy) in front of listen_async remains the higher-throughput option;
+# (nginx/caddy) in front of listen_reactor_pool remains the higher-throughput option;
 # this gives watax native HTTPS for self-contained deployments.
 
 from std.async.thread import Thread
