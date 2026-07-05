@@ -163,6 +163,19 @@ async fn handle(req: Request<Incoming>) -> Result<Response<FullBody>, Infallible
 
 #[tokio::main]
 async fn main() {
+    let workers: usize = std::env::var("AXUM_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4);
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(serve());
+}
+
+async fn serve() {
     let listener = TcpListener::bind("127.0.0.1:8300").await.unwrap();
     loop {
         let (stream, _) = listener.accept().await.unwrap();

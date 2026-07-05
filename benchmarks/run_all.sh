@@ -38,7 +38,7 @@ CONC=1000
 DUR=10
 THREADS=8
 REQUESTS=10000
-WORKERS=8   # server workers for FastAPI; also set listen_reactor_pool() in watax_app/src/main.tr
+WORKERS=1   # server workers for FastAPI; also set listen_reactor_pool() in watax_app/src/main.tr
 
 PY="$(command -v python3 || command -v python || echo python3)"
 
@@ -191,7 +191,7 @@ if command -v cargo &>/dev/null; then
     ( cd "$BENCH/axum_app" && cargo build --release >/tmp/axum_build.log 2>&1 )
     AX="$BENCH/axum_app/target/release/axum_bench"
     if [ -x "$AX" ]; then
-        "$AX" & SERVER_PID=$!
+        AXUM_WORKERS=$WORKERS "$AX" & SERVER_PID=$!
         bench_framework axum 8300 "$SERVER_PID" || true
         kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null
     else

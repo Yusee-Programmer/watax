@@ -9,9 +9,9 @@ $WATAX_ROOT = (Resolve-Path "$BENCH\..").Path
 $RESULTS_MD = Join-Path $BENCH "results.md"
 $LOADTEST   = Join-Path $BENCH "loadtest.py"
 $CONC    = 1000
-$DUR     = 0
+$DUR     = 10
 $REQUESTS = 10000
-$WORKERS  = 8   # server workers for FastAPI; also set listen_reactor_pool() in watax_app/src/main.tr
+$WORKERS  = 1   # server workers for FastAPI; also set listen_reactor_pool() in watax_app/src/main.tr
 
 $PY = (Get-Command python -ErrorAction SilentlyContinue).Source
 if (-not $PY) { $PY = (Get-Command python3 -ErrorAction SilentlyContinue).Source }
@@ -96,6 +96,7 @@ if (Get-Command cargo -ErrorAction SilentlyContinue) {
     Push-Location "$BENCH\axum_app"; & cargo build --release 2>&1 | Out-File "$env:TEMP\axum_build.log"; Pop-Location
     $ax = "$BENCH\axum_app\target\release\axum_bench.exe"
     if (Test-Path $ax) {
+        $env:AXUM_WORKERS = "$WORKERS"
         $proc = Start-Process -FilePath $ax -PassThru -WindowStyle Hidden
         Bench-Framework "axum" 8300 $proc
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
