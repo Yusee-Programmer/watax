@@ -9,9 +9,9 @@ $WATAX_ROOT = (Resolve-Path "$BENCH\..").Path
 $RESULTS_MD = Join-Path $BENCH "results.md"
 $LOADTEST   = Join-Path $BENCH "loadtest.py"
 $CONC    = 1000
-$DUR     = 0
-$REQUESTS = 100000
-$WORKERS  = 8   # server workers for FastAPI; also set listen_reactor_pool() in watax_app/src/main.tr
+$DUR     = 10
+$REQUESTS = 1000
+$WORKERS  = 4   # server workers for FastAPI; also set listen_reactor_pool() in watax_app/src/main.tr
 
 $PY = (Get-Command python -ErrorAction SilentlyContinue).Source
 if (-not $PY) { $PY = (Get-Command python3 -ErrorAction SilentlyContinue).Source }
