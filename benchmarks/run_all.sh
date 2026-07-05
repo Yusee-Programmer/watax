@@ -37,11 +37,13 @@ LOADTEST="$BENCH/loadtest.py"
 unset BENCH_CONC
 unset BENCH_DUR
 unset BENCH_THREADS
+unset BENCH_REQUESTS
 
 # Fixed load settings
-CONC=10000
-DUR=60
-THREADS=16
+CONC=${BENCH_CONC:-100}
+DUR=${BENCH_DUR:-0}
+THREADS=${BENCH_THREADS:-8}
+REQUESTS=${BENCH_REQUESTS:-10000}
 
 PY="$(command -v python3 || command -v python || echo python3)"
 
@@ -71,7 +73,8 @@ runload() {
         # wrk --latency reports Requests/sec, avg Latency, the latency
         # distribution (50/75/90/99%), Transfer/sec, socket errors and non-2xx
         # counts. Normalize every latency to ms and transfer to MB.
-        "$WRK" -t"$THREADS" -c"$CONC" -d"${DUR}s" --latency "$1" 2>/dev/null | awk '
+        local dur_s="$DUR"; [ "$dur_s" -le 0 ] && dur_s=30
+        "$WRK" -t"$THREADS" -c"$CONC" -d"${dur_s}s" --latency "$1" 2>/dev/null | awk '
             function ms(v) {
                 if      (v ~ /us$/) { sub(/us/,"",v); return v/1000 }
                 else if (v ~ /ms$/) { sub(/ms/,"",v); return v+0 }
@@ -99,7 +102,7 @@ runload() {
                 printf "%s|%d|%.3f|%.3f|%.3f|%.2f", rps, e, lat, p50, p99, xfer
             }'
     else
-        "$PY" "$LOADTEST" "$1" "$CONC" "$DUR" 2>/dev/null | awk -F: '
+        "$PY" "$LOADTEST" "$1" "$CONC" "$DUR" yes "$REQUESTS" 2>/dev/null | awk -F: '
             /Req\/sec/      {gsub(/ /,"",$2); rps=$2}
             /Errors/        {gsub(/ /,"",$2); err=$2}
             /Avg latency/   {gsub(/ms/,"",$2); gsub(/ /,"",$2); lat=$2}
@@ -157,9 +160,9 @@ echo ""
 printf "${CYN}=================================================================${RST}\n"
 printf "${CYN}  watax HTTP Benchmark — watax vs axum (Rust) vs FastAPI (Python)${RST}\n"
 if [ -n "$WRK" ]; then
-    printf "${CYN}  load: wrk  %s threads × %s conns × %ss/endpoint${RST}\n" "$THREADS" "$CONC" "$DUR"
+    printf "${CYN}  load: wrk  %s threads × %s conns × %s req/endpoint${RST}\n" "$THREADS" "$CONC" "$REQUESTS"
 else
-    printf "${YLW}  load: loadtest.py (wrk not found)  %s conns × %ss/endpoint${RST}\n" "$CONC" "$DUR"
+    printf "${YLW}  load: loadtest.py (wrk not found)  %s conns × %s req/endpoint${RST}\n" "$CONC" "$REQUESTS"
 fi
 printf "${CYN}=================================================================${RST}\n\n"
 
@@ -207,7 +210,7 @@ fi
 if "$PY" -c "import fastapi, uvicorn" 2>/dev/null; then
     printf "${YLW}Starting FastAPI (uvicorn)...${RST}\n"
     ( cd "$BENCH/fastapi_app" && "$PY" -m uvicorn main:app --host 127.0.0.1 --port 8400 \
-        --no-access-log --log-level warning >/tmp/fastapi.log 2>&1 ) & SERVER_PID=$!
+        --workers 8 --no-access-log --log-level warning >/tmp/fastapi.log 2>&1 ) & SERVER_PID=$!
     bench_framework fastapi 8400 "$SERVER_PID" || true
     kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null
     # uvicorn spawns a child; make sure the port is freed.
@@ -227,9 +230,9 @@ fi
     echo "- **Host:** $(uname -s) $(uname -m)"
     echo "- **Date (UTC):** $(date -u '+%Y-%m-%d %H:%M:%S')"
     if [ -n "$WRK" ]; then
-        echo "- **Load:** \`wrk\` — ${THREADS} threads × ${CONC} connections × ${DUR}s per endpoint"
+        echo "- **Load:** \`wrk\` — ${THREADS} threads × ${CONC} connections × ${REQUESTS} requests per endpoint  (8 proc x 1 worker each)"
     else
-        echo "- **Load:** \`loadtest.py\` — ${CONC} keep-alive connections × ${DUR}s per endpoint"
+        echo "- **Load:** \`loadtest.py\` — ${CONC} keep-alive connections × ${REQUESTS} requests per endpoint  (8 proc x 1 worker each)"
     fi
     if [ -n "$TAU_EXE" ]; then echo "- **Compiler:** \`$TAU_EXE\`"; fi
     if command -v cargo &>/dev/null; then echo "- **Rust:** $(rustc --version 2>/dev/null)"; fi
