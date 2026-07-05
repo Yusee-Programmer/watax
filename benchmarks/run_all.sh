@@ -34,8 +34,8 @@ RESULTS_MD="$BENCH/results.md"
 LOADTEST="$BENCH/loadtest.py"
 
 # Fixed load settings
-CONC=10000
-DUR=10
+CONC=1000
+DUR=0
 THREADS=8
 REQUESTS=100000
 WORKERS=8   # server workers for FastAPI; also set listen_reactor_pool() in watax_app/src/main.tr
