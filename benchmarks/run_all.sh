@@ -33,17 +33,11 @@ WATAX_ROOT="$(cd "$BENCH/.." && pwd)"
 RESULTS_MD="$BENCH/results.md"
 LOADTEST="$BENCH/loadtest.py"
 
-# Remove any inherited benchmark settings from CI
-# unset BENCH_CONC
-# unset BENCH_DUR
-# unset BENCH_THREADS
-# unset BENCH_REQUESTS
-
 # Fixed load settings
-CONC=${BENCH_CONC:-1000}
-DUR=${BENCH_DUR:-10}
-THREADS=${BENCH_THREADS:-8}
-REQUESTS=${BENCH_REQUESTS:-10000}
+CONC=1000
+DUR=10
+THREADS=8
+REQUESTS=10000
 
 PY="$(command -v python3 || command -v python || echo python3)"
 

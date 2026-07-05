@@ -8,9 +8,9 @@ $BENCH      = $PSScriptRoot
 $WATAX_ROOT = (Resolve-Path "$BENCH\..").Path
 $RESULTS_MD = Join-Path $BENCH "results.md"
 $LOADTEST   = Join-Path $BENCH "loadtest.py"
-$CONC     = if ($env:BENCH_CONC)     { [int]$env:BENCH_CONC }     else { 100 }
-$DUR      = if ($env:BENCH_DUR)      { [int]$env:BENCH_DUR }      else { 0 }
-$REQUESTS = if ($env:BENCH_REQUESTS) { [int]$env:BENCH_REQUESTS } else { 10000 }
+$CONC     = 100
+$DUR      = 0
+$REQUESTS = 10000
 
 $PY = (Get-Command python -ErrorAction SilentlyContinue).Source
 if (-not $PY) { $PY = (Get-Command python3 -ErrorAction SilentlyContinue).Source }
