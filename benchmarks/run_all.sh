@@ -39,7 +39,7 @@ unset BENCH_DUR
 unset BENCH_THREADS
 
 # Fixed load settings
-CONC=1000
+CONC=10000
 DUR=60
 THREADS=16
 
