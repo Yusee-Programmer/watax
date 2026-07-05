@@ -161,8 +161,7 @@ async fn handle(req: Request<Incoming>) -> Result<Response<FullBody>, Infallible
     Ok(resp)
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let workers: usize = std::env::var("AXUM_WORKERS")
         .ok()
         .and_then(|v| v.parse().ok())
