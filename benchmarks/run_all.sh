@@ -34,10 +34,10 @@ RESULTS_MD="$BENCH/results.md"
 LOADTEST="$BENCH/loadtest.py"
 
 # Remove any inherited benchmark settings from CI
-unset BENCH_CONC
-unset BENCH_DUR
-unset BENCH_THREADS
-unset BENCH_REQUESTS
+# unset BENCH_CONC
+# unset BENCH_DUR
+# unset BENCH_THREADS
+# unset BENCH_REQUESTS
 
 # Fixed load settings
 CONC=${BENCH_CONC:-100}
