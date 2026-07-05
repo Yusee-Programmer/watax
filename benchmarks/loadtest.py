@@ -12,13 +12,15 @@ import time
 from urllib.parse import urlparse
 
 
-def worker(host, port, path, duration, results, idx, keepalive):
+def worker(host, port, path, duration, results, idx, keepalive, max_requests=0):
     count = 0
     errors = 0
     total_latency = 0.0
-    end = time.monotonic() + duration
+    end = time.monotonic() + duration if duration > 0 else float('inf')
     conn = http.client.HTTPConnection(host, port, timeout=5) if keepalive else None
     while time.monotonic() < end:
+        if max_requests > 0 and (count + errors) >= max_requests:
+            break
         start = time.monotonic()
         try:
             if not keepalive:
@@ -50,7 +52,9 @@ def main():
     url = sys.argv[1]
     concurrency = int(sys.argv[2]) if len(sys.argv) > 2 else 20
     duration = float(sys.argv[3]) if len(sys.argv) > 3 else 5.0
-    keepalive = (sys.argv[4].lower() != "no-keepalive") if len(sys.argv) > 4 else True
+    keepalive = (sys.argv[4].lower() not in ("no", "no-keepalive", "false")) if len(sys.argv) > 4 else True
+    requests_total = int(sys.argv[5]) if len(sys.argv) > 5 else 0
+    per_worker = (requests_total + concurrency - 1) // concurrency if requests_total > 0 else 0
 
     parsed = urlparse(url)
     host = parsed.hostname
@@ -61,7 +65,7 @@ def main():
     threads = []
     t0 = time.monotonic()
     for i in range(concurrency):
-        t = threading.Thread(target=worker, args=(host, port, path, duration, results, i, keepalive))
+        t = threading.Thread(target=worker, args=(host, port, path, duration, results, i, keepalive, per_worker))
         threads.append(t)
         t.start()
     for t in threads:
@@ -78,6 +82,8 @@ def main():
     print(f"URL:          {url}")
     print(f"Keep-alive:   {keepalive}")
     print(f"Concurrency:  {concurrency}")
+    if requests_total > 0:
+        print(f"Target reqs:  {requests_total}")
     print(f"Duration:     {elapsed:.2f}s")
     print(f"Requests:     {total_count}")
     print(f"Errors:       {total_errors}")
