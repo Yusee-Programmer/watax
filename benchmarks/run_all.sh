@@ -38,6 +38,7 @@ CONC=1000
 DUR=10
 THREADS=8
 REQUESTS=10000
+WORKERS=8   # server workers for FastAPI; also set listen_reactor_pool() in watax_app/src/main.tr
 
 PY="$(command -v python3 || command -v python || echo python3)"
 
@@ -204,7 +205,7 @@ fi
 if "$PY" -c "import fastapi, uvicorn" 2>/dev/null; then
     printf "${YLW}Starting FastAPI (uvicorn)...${RST}\n"
     ( cd "$BENCH/fastapi_app" && "$PY" -m uvicorn main:app --host 127.0.0.1 --port 8400 \
-        --workers 8 --no-access-log --log-level warning >/tmp/fastapi.log 2>&1 ) & SERVER_PID=$!
+        --workers "$WORKERS" --no-access-log --log-level warning >/tmp/fastapi.log 2>&1 ) & SERVER_PID=$!
     bench_framework fastapi 8400 "$SERVER_PID" || true
     kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null
     # uvicorn spawns a child; make sure the port is freed.
@@ -224,9 +225,9 @@ fi
     echo "- **Host:** $(uname -s) $(uname -m)"
     echo "- **Date (UTC):** $(date -u '+%Y-%m-%d %H:%M:%S')"
     if [ -n "$WRK" ]; then
-        echo "- **Load:** \`wrk\` — ${THREADS} threads × ${CONC} connections × ${REQUESTS} requests per endpoint  (8 proc x 1 worker each)"
+        echo "- **Load:** \`wrk\` — ${THREADS} threads × ${CONC} connections × ${REQUESTS} requests per endpoint  (${WORKERS} proc x 1 worker each)"
     else
-        echo "- **Load:** \`loadtest.py\` — ${CONC} keep-alive connections × ${REQUESTS} requests per endpoint  (8 proc x 1 worker each)"
+        echo "- **Load:** \`loadtest.py\` — ${CONC} keep-alive connections × ${REQUESTS} requests per endpoint  (${WORKERS} proc x 1 worker each)"
     fi
     if [ -n "$TAU_EXE" ]; then echo "- **Compiler:** \`$TAU_EXE\`"; fi
     if command -v cargo &>/dev/null; then echo "- **Rust:** $(rustc --version 2>/dev/null)"; fi
