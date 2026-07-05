@@ -211,4 +211,4 @@ def main():
     # Green-thread server: 8 OS worker threads, each running a cooperative
     # scheduler + reactor; every connection is handled on its own lightweight
     # green thread (Coro) doing non-blocking async I/O.
-    app.listen_reactor_pool("127.0.0.1", 8200, 1)
+    app.listen_reactor_pool("127.0.0.1", 8200, 8)
