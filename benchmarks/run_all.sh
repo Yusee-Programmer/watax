@@ -165,9 +165,10 @@ printf "${CYN}=================================================================$
 if [ -n "$TAU_EXE" ] && [ -x "$TAU_EXE" ] || command -v "$TAU_EXE" &>/dev/null; then
     printf "${YLW}Building watax_app...${RST}\n"
     # Build from the watax ROOT so `from watax import ...` resolves the framework
-    # modules (src/) and the templa dependency (.taupkg/packages/).
+    # modules (src/) and the templa dependency. Both watax and templa follow the
+    # <pkg>/src library-entry convention, so put each package's src/ on the path.
     ( cd "$WATAX_ROOT" \
-      && TAURARO_PATH="$WATAX_ROOT/.taupkg/packages:$WATAX_ROOT/src" \
+      && TAURARO_PATH="$WATAX_ROOT/.taupkg/packages/templa/src:$WATAX_ROOT/src" \
          "$TAU_EXE" --strict -O3 benchmarks/watax_app/src/main.tr -o "$BENCH/watax_app/server" >/tmp/watax_build.log 2>&1 )
     WX="$BENCH/watax_app/server"; [ -x "$WX" ] || WX="$BENCH/watax_app/server.exe"
     if [ -x "$WX" ]; then

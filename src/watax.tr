@@ -29,7 +29,7 @@
 # so users only need `from watax import ...`.
 
 from std.encoding.json import JsonDoc, JsonRef, JsonWriter
-from templa import Context
+from templa import Context, html_escape, render_string, render_file
 
 from route import Route
 from static_files import StaticMount, content_type_for, serve_static

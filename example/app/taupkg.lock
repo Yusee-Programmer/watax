@@ -6,7 +6,7 @@ name       = "watax"
 version    = "0.1.0"
 constraint = "*"
 source     = "local:../.."
-checksum   = "sha256:207a309caa9532139dcdd859bbe937cf4bd33b3ea3626739895f02eaaa458563"
+checksum   = "sha256:0fd830a04b80e6ec0311bc67fc7331fead260d01da9a6a6a1525f9bf5c5d1462"
 
 [[pkg]]
 name       = "templa"

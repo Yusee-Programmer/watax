@@ -78,7 +78,7 @@ if ($TAU -and (Test-Path $TAU)) {
     # watax itself is built). Use forward slashes — the resolver normalizes them
     # and they avoid backslash-escaping surprises in search-path matching.
     $rootFwd = $WATAX_ROOT -replace '\\','/'
-    $env:TAURARO_PATH = "$rootFwd/.taupkg/packages;$rootFwd/src"
+    $env:TAURARO_PATH = "$rootFwd/.taupkg/packages/templa/src;$rootFwd/src"
     Push-Location $WATAX_ROOT
     & $TAU --strict -O3 "benchmarks/watax_app/src/main.tr" -o "$BENCH\watax_app\server.exe" 2>&1 | Out-File "$env:TEMP\watax_build.log"
     Pop-Location
