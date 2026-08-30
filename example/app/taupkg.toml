@@ -1,10 +1,12 @@
 [package]
 name    = "watax_notes"
 version = "0.1.0"
-desc    = ""
+desc    = "Reference application for the watax web framework."
 license = "MIT"
 bin     = "src/main.tr"
 
 [deps]
-watax  = "local:C:\\Users\\Yusee Habibu\\tauProject\\watax"
-templa = "local:C:\\Users\\Yusee Habibu\\tauProject\\templa"
+# watax is the sibling workspace member (the repo root, two dirs up). templa is
+# pulled in transitively from watax's own [deps] (github source), so it is NOT
+# listed here — that keeps a single agreed source for templa across the graph.
+watax = "local:../.."

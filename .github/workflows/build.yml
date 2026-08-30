@@ -52,6 +52,7 @@ jobs:
           TAUPKG=$(find taupkg-bin -name "taupkg${EXT}" -type f | head -1)
           chmod +x "$TAUPKG" 2>/dev/null || true
           echo "taupkg: $TAUPKG"
+          echo "TAUPKG=$TAUPKG" >> "$GITHUB_ENV"
 
           # 2. Install the latest tauraroc (downloads from tauraro/tauraro).
           #    Resolve the version with the AUTHENTICATED gh CLI and pass it via
@@ -79,26 +80,26 @@ jobs:
           [ -z "$TAURAROC" ] && { echo "error: tauraroc not found after install-tauraro"; exit 1; }
           echo "tauraroc: $TAURAROC ($("$TAURAROC" --version 2>/dev/null || echo '?'))"
           echo "TAURAROC=$TAURAROC" >> "$GITHUB_ENV"
+          # taupkg finds the compiler via TAURARO_COMPILER (else PATH).
+          echo "TAURARO_COMPILER=$TAURAROC" >> "$GITHUB_ENV"
 
-          # 4. Fetch dependencies (templa, from the github source in taupkg.toml).
-          "$TAUPKG" install || true
-          # Fallback: guarantee templa is present even if `taupkg install` hit a
-          # snag (it shells out to git clone). CI paths have no spaces, so this
-          # is robust.
-          if [ ! -d .taupkg/packages/templa ]; then
-            echo "==> cloning templa directly"
-            mkdir -p .taupkg/packages
-            git clone --depth 1 https://github.com/Yusee-Programmer/templa.git .taupkg/packages/templa
-          fi
-          ls .taupkg/packages
+          # 4. Fetch workspace dependencies: templa (github source in taupkg.toml)
+          #    and watax itself (resolved as a local workspace member). `taupkg
+          #    install` fans out to every [workspace] member; it quotes git-clone
+          #    paths, so spaces in the checkout path are handled.
+          "$TAUPKG" install
+          ls example/app/.taupkg/packages
 
-      - name: Build watax (verify it compiles)
+      - name: Build watax via taupkg (verify the framework + app compile)
         shell: bash
         run: |
-          export TAURARO_PATH="$(pwd)/.taupkg/packages:$(pwd)/src"
-          "$TAURAROC" --strict src/main.tr -o "watax${{ matrix.ext }}"
-          [ -f "watax${{ matrix.ext }}" ] || { echo "error: watax did not build"; exit 1; }
-          echo "==> Built watax${{ matrix.ext }}: $(ls -lh watax${{ matrix.ext }})"
+          # watax is a LIBRARY (entry src/watax.tr, no main.tr). The workspace
+          # member example/app is its reference app; `taupkg build` fans out and
+          # compiles watax + templa + the app end-to-end with the latest tauraroc.
+          "$TAUPKG" build
+          BIN="example/app/watax_notes${{ matrix.ext }}"
+          [ -f "$BIN" ] || { echo "error: workspace build did not produce $BIN"; exit 1; }
+          echo "==> Built $BIN: $(ls -lh "$BIN")"
 
       - name: Upload watax source artifact
         uses: actions/upload-artifact@v4

@@ -35,8 +35,13 @@ def main():
 ```
 
 ```sh
-taupkg build && ./watax          # or: tauraroc src/main.tr -o watax && ./watax
+# watax is a LIBRARY — add it to your app's [deps] and build YOUR app:
+taupkg build && ./myapp
 ```
+
+> A complete, runnable reference app lives in [`example/app`](example/app) — from
+> the repo root, `taupkg build` (a taupkg workspace) compiles watax + the app
+> end-to-end and produces `example/app/watax_notes`.
 
 > Builder calls **chain fluently** across lines (indented `.get(...)` / `.post(...)`
 > lines, leading- or trailing-dot). Prefer one binding + a chain over reassigning

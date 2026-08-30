@@ -3,9 +3,17 @@ name    = "watax"
 version = "0.1.0"
 desc    = "A fast, ergonomic web framework for Tauraro."
 license = "MIT"
-bin     = "src/main.tr"
+# watax is a LIBRARY. A pure library's entry point is its library module
+# (watax.tr), NOT a main.tr — consumers do `from watax import App, ...`, and
+# `taupkg build` compile-checks the module (tauraroc synthesizes the entry).
+bin     = "src/watax.tr"
 
 [deps]
-# templa is fetched from GitHub (cloned into .taupkg/packages/templa by
-# `taupkg install`). Use a `@tag` suffix to pin a release once templa cuts one.
+# templa is fetched from GitHub. Pin a `@tag` once templa cuts a release.
 templa = "github:Yusee-Programmer/templa"
+
+# Development workspace: `taupkg build` at the repo root builds the reference app
+# (example/app), which depends on watax via a local path — so building it compiles
+# the whole framework. templa flows in transitively from watax's github source.
+[workspace]
+members = ["example/app"]
