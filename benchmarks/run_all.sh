@@ -38,7 +38,7 @@ CONC=1000
 DUR=60
 THREADS=8
 REQUESTS=1000
-WORKERS=8   # server workers for FastAPI; also set listen_reactor_pool() in watax_app/src/main.tr
+WORKERS=4   # server workers for FastAPI; also set listen_reactor_pool() in watax_app/src/main.tr
 
 PY="$(command -v python3 || command -v python || echo python3)"
 

@@ -140,11 +140,11 @@ def _handle_connection(arg: Pointer[char]):
     mut conn = HttpConn.init(req_ptr as HttpRequest, stream)
     App._serve_conn(_app(), conn)
 
-# Accept loop coroutine (one per worker): non-blocking accept, parking on
-# the listener's readiness between connections. (`TcpListener.accept_async()`
-# has a known compiler bug returning a class instance across a coroutine
-# park — this is the documented inline workaround from its own doc comment
-# in std/net/tcp.tr.) Spawns one coroutine per accepted connection.
+# Accept loop coroutine (one per worker): non-blocking accept, polling the
+# listener between connections. (`TcpListener.accept_async()` has a known
+# compiler bug returning a class instance across a coroutine park — this is
+# the documented inline workaround from its own doc comment in
+# std/net/tcp.tr.) Spawns one coroutine per accepted connection.
 def _accept_loop(arg: Pointer[char]):
     mut lfd: int = 0
     unsafe: lfd = arg as int
@@ -158,7 +158,26 @@ def _accept_loop(arg: Pointer[char]):
         if s.fd >= 0:
             unsafe: Coro.spawn(_handle_connection as Pointer[char], s.fd as Pointer[char])
         else:
-            Coro.await_readable(lfd)
+            # NOT `Coro.await_readable(lfd)`: that parks this coroutine on
+            # the reactor until the listening socket itself reports
+            # readiness, with no other wakeup source. The scheduler only
+            # re-examines a parked coroutine's own code (including the
+            # `Signal.shutdown_requested()` check above) when ITS registered
+            # fd gets an event — `_tr_install_shutdown_handler`'s SIGINT/
+            # SIGTERM handler only flips a flag, there's no self-pipe/eventfd
+            # to interrupt an in-flight epoll_wait/kevent. So once the last
+            # connection closes and no new one arrives, this coroutine would
+            # never resume to notice a shutdown signal, and the process hangs
+            # forever — confirmed for real: watax's own CI benchmark job hung
+            # 4+ hours after `kill $SERVER_PID` (SIGTERM) because the accept
+            # loop was idle when the signal arrived. A bounded sleep instead
+            # of an indefinite readiness wait re-checks the flag at worst
+            # every 50ms — negligible added latency to notice a brand-new
+            # connection (and irrelevant to steady-state throughput: this
+            # loop only governs accept(), not the event-driven, fully async
+            # per-connection I/O in `_handle_connection`) — in exchange for a
+            # shutdown that is actually bounded instead of unbounded.
+            Coro.sleep_ms(50)
     print("watax: worker shutting down")
 
 def _reactor_run(w: Shared[ReactorWorker]):
