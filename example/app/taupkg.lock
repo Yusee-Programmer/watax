@@ -6,12 +6,12 @@ name       = "watax"
 version    = "0.1.0"
 constraint = "*"
 source     = "local:../.."
-checksum   = "sha256:0fd830a04b80e6ec0311bc67fc7331fead260d01da9a6a6a1525f9bf5c5d1462"
+checksum   = "sha256:6ab035345bff084df8f5701a78df1672c24f525106bad3e919a42565497cdb3d"
 
 [[pkg]]
 name       = "templa"
 version    = "0.1.0"
 constraint = "*"
-source     = "github:https://github.com/Yusee-Programmer/templa.git@c2a220d08b40c1efdeb41d0dacc9bb0134b61cf9"
-checksum   = "sha256:04f65314a2de85edba52ad42a638fde23b75d6545fc2029a83861bf3c78bd1ed"
+source     = "github:https://github.com/Yusee-Programmer/templa.git@657541c4d1f07531ca0b440c11bdaa210ac1e679"
+checksum   = "sha256:2fba770918d83bf5056acf3566f3a9b70e5d5f7f13e5e52dbc3e65623888b189"
 

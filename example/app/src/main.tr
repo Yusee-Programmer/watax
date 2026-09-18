@@ -37,6 +37,7 @@ from store import store_len, store_get, store_set, store_remove, store_add, stor
 from std.net.http_server import HttpConn
 from std.encoding.json import JsonWriter
 from std.string.str import Str
+from std.async.coro import Coro
 from core.vec import Vec
 
 
@@ -130,7 +131,7 @@ def events(c: HttpConn):
     mut i = 0
     while i < 5:
         c.send_event("notes=" + store_len().to_str() + " tick=" + i.to_str())
-        Thread.sleep(1000)
+        Coro.sleep_ms(1000)
         i = i + 1
     c.end_chunked()
 

@@ -1,0 +1,77 @@
+# Regression test for the per-core coroutine reactor (src/reactor.tr):
+# basic request handling still works, and a slow `async def` handler no
+# longer stalls other connections on the same worker.
+#
+# Run with `taupkg test` from the watax repo root.
+
+from watax import App, TestClient
+from std.net.http_server import HttpConn
+from std.net.http import HttpClient
+from std.async.coro import Coro
+from std.async.thread import Thread
+from std.sys.time import Clock
+from std.test import TestRunner
+
+def home(c: HttpConn):
+    c.send_text(200, "Hello, World!")
+
+def echo_post(c: HttpConn):
+    c.send_text(201, "created")
+
+# `async def` handler: awaits (via Coro.sleep_ms) instead of blocking. Proves
+# handlers can now be genuinely async - see the "async handler does not
+# block other connections" section below.
+async def slow(c: HttpConn):
+    Coro.sleep_ms(300)
+    c.send_text(200, "slow done")
+
+def fast(c: HttpConn):
+    c.send_text(200, "fast done")
+
+def build_app() -> App:
+    return App.new()
+        .get("/", home)
+        .post("/echo", echo_post)
+        .get("/slow", slow)
+        .get("/fast", fast)
+
+def fire_slow(port: int):
+    mut c = HttpClient.init("127.0.0.1", port)
+    c.get("/slow")
+
+def fire_fast(port: int) -> int:
+    mut c = HttpClient.init("127.0.0.1", port)
+    mut r = c.get("/fast")
+    return r.status
+
+def main():
+    mut t = TestRunner.init("watax reactor async")
+
+    mut client = TestClient.start(build_app(), 18211)
+
+    t.section("basic requests")
+    mut r1 = client.get("/")
+    t.assert_eq_int(r1.status, 200, "GET / status")
+    t.assert_eq_str(r1.body, "Hello, World!", "GET / body")
+
+    mut r2 = client.post("/echo", "x=1")
+    t.assert_eq_int(r2.status, 201, "POST /echo status")
+
+    mut r3 = client.get("/nope")
+    t.assert_eq_int(r3.status, 404, "unmatched route is 404")
+
+    t.section("async handler does not block other connections")
+    # Fire the slow (300ms, Coro.sleep_ms) request on its own OS thread so it
+    # overlaps with the fast request below. If a slow async handler still
+    # stalled its worker, the fast request would also take ~300ms instead of
+    # returning almost immediately.
+    mut slow_thread = Thread.spawn(fire_slow, 18211)
+    Thread.sleep(50)   # let the slow request be accepted and start sleeping first
+    mut fast_start = Clock.now_ms()
+    mut fr = fire_fast(18211)
+    mut fast_elapsed = Clock.now_ms() - fast_start
+    t.assert_eq_int(fr, 200, "fast request status while slow request in flight")
+    t.assert_lt_int(fast_elapsed, 200, "fast request returns quickly, not blocked by the slow one")
+    slow_thread.join()
+
+    t.summary()

@@ -1,107 +1,56 @@
 # @trusted: watax framework core — audited byte-level parsing/reactor (raw-pointer systems code, like hyper/tokio internals).
-# watax reactor — epoll/select-driven event loop for many keep-alive
+# watax reactor — per-core coroutine event loop for many keep-alive
 # connections per thread, without a thread per connection.
 #
-# This mirrors the core idea behind tokio/axum's scalability: the cost of an
-# *idle* keep-alive connection (waiting for the client's next request) is
-# just one fd registered with the OS readiness multiplexer (epoll on Linux,
-# select on Windows via the runtime's _TrIOPoll) - not a blocked OS thread.
-# A small, fixed number of worker threads (`listen_reactor_pool`) share one
-# listening socket; each worker's event loop only does CPU/dispatch work for
-# connections that actually have data ready.
+# Each reactor worker OS thread runs its own cooperative coroutine scheduler
+# (Tauraro's `async def`/`await`/`Coro` runtime, itself driven by the OS's
+# readiness multiplexer — epoll/kqueue/WSAPoll). One coroutine handles the
+# accept loop; every accepted connection gets its OWN coroutine, running the
+# SAME keep-alive request loop `App.listen()` already uses
+# (`App._serve_conn`), just with the underlying `TcpStream` in `async_mode`
+# so its `recv()`/`send()` cooperate with the scheduler instead of blocking
+# the OS thread. This is the same architecture Tokio/axum use for their
+# per-core workers: no separate handler thread pool, no cross-thread hop —
+# request handling shares the SAME thread that already does the
+# connection's I/O.
 #
-# What this does NOT do (yet): true async handlers. Once a full request is
-# buffered, the route handler runs synchronously to completion on the
-# worker's thread - fine for the fast, CPU-light
-# handlers typical of a JSON/HTML API. A handler that blocks for a long time
-# (slow upstream call, big file I/O) will stall that worker's other
-# connections; run a slow handler on its own thread if needed.
+# Crucially, a route handler may now be `async def` and `await` other async
+# calls (an outbound HTTP request, `Coro.sleep_ms`, anything built on the
+# coroutine runtime) WITHOUT stalling this worker's other connections: while
+# one connection's coroutine is suspended awaiting something, the scheduler
+# runs any other ready coroutine on this same worker. A plain synchronous
+# handler still works exactly as before, at the same cost as today.
+#
+# For genuinely CPU-heavy work, or a blocking call with no async equivalent,
+# a handler can offload it onto `AsyncPool` (`std.async.pool`) and
+# cooperatively wait for the result with `while not task.done():
+# Coro.yield_now()` — NOT `task.join()`, which is a real OS-level blocking
+# wait and would stall this whole worker, defeating the point. That's a
+# secondary, opt-in outlet, not the default path.
+#
+# watax previously had a coroutine-per-connection mode (`listen_async`) that
+# was removed for racing: it shared the App across worker OS threads via a
+# raw, unsynchronized global variable. That mechanism (not the coroutine
+# model itself) was the bug — this version reaches the same App safely via
+# the existing per-worker `Mutex[App]` handoff (`ReactorWorker`, unchanged)
+# plus a `ThreadLocal[Pointer[char]]` raw-pointer slot to make that
+# already-safe, thread-owned value reachable from the coroutines spawned on
+# that same thread (see `_tl_app`'s own comment for why it's a raw pointer,
+# not `ThreadLocal[App]`).
 
-from std.io.poll import IOPoll, IOEvent
+from std.net.http_server import HttpServer, HttpConn
 from std.net.tcp import TcpStream, TcpListener
-from std.net.http_server import HttpServer, HttpConn, HttpRequest, HttpParser
-from std.string.str import Str
-from std.core.string import StringBuilder
-from std.core.map import Map
-from std.async.thread import Thread
+from std.async.coro import Coro
+from std.async.thread import Thread, ThreadLocal
 from std.async.mutex import Mutex
 from std.async.send import Sendable
 from std.sys.signal import Signal
+from std.string.str import Str
 from app import App
 
-extern "C":
-    def _tr_c_free(ptr: Pointer[char])
-
-# Per-connection reactor state: the non-blocking socket plus a buffer for
-# the request currently being assembled across one or more recv_nb() calls.
-#
-# Note: deliberately named `dispose`, not `free` - a `free(self)` method
-# would make the compiler's auto-drop free this instance when the local
-# `rc` variable that creates it goes out of scope, even though a pointer to
-# it is kept alive in the worker's `conns` map. `dispose` is called
-# explicitly when a connection is removed from that map.
-class RConn:
-    pub fd:             int
-    pub stream:         TcpStream
-    pub read_sb:        StringBuilder
-    pub header_end:     int   # -1 until "\r\n\r\n" has been seen
-    pub content_length: int
-
-extend RConn:
-    pub def init(stream: TcpStream) -> RConn:
-        mut c = RConn()
-        c.fd             = stream.fd
-        c.stream         = stream
-        c.read_sb        = StringBuilder.init(4096)
-        c.header_end     = -1
-        c.content_length = 0
-        return c
-
-    # Read whatever is currently available without blocking.
-    # Returns: 1 = a full request is buffered, 0 = need more data,
-    # -1 = peer closed the connection.
-    pub def poll_read(self) -> int:
-        mut read_any = false
-        while true:
-            mut chunk = self.stream.recv_nb(16384)
-            if self.stream.would_block():
-                break
-            if Str.len(chunk) == 0:
-                return -1
-            read_any = true
-            self.read_sb.append(chunk)
-            unsafe: _tr_c_free(chunk as Pointer[char])
-        if self.header_end < 0:
-            self.header_end = Str.index_of(self.read_sb.as_str(), "\r\n\r\n")
-            if self.header_end < 0:
-                if not read_any: return 0
-                return 0
-            mut hdr = Str.slice(self.read_sb.as_str(), 0, self.header_end)
-            self.content_length = HttpParser.content_length(hdr)
-            unsafe: _tr_c_free(hdr as Pointer[char])
-        mut have = self.read_sb.len() - (self.header_end + 4)
-        if have < self.content_length:
-            return 0
-        return 1
-
-    # Consume the buffered request, parse it, and reset state so this
-    # (keep-alive) connection can buffer the next request.
-    pub def take_request(self) -> HttpRequest:
-        mut raw = self.read_sb.to_owned()
-        mut req = HttpParser.parse(raw)
-        unsafe: _tr_c_free(raw as Pointer[char])
-        self.read_sb.free()
-        self.read_sb    = StringBuilder.init(4096)
-        self.header_end = -1
-        self.content_length = 0
-        return req
-
-    pub def dispose(self):
-        self.read_sb.free()
-        unsafe: _tr_c_free(self as Pointer[char])
-
-# One reactor worker: its own IOPoll + connection table, sharing the App's
-# (read-only) route table and one listening socket with the other workers.
+# One reactor worker: its own coroutine scheduler + connections, sharing the
+# App's (read-only after setup) route table and one listening socket with
+# the other workers.
 class ReactorWorker implements Sendable, UnsafeSendable:
     pub app:      Mutex[App]
     pub listener: Mutex[TcpListener]
@@ -113,89 +62,132 @@ extend ReactorWorker:
         w.listener = Mutex[TcpListener].init(listener)
         return w
 
-# Sentinel userdata value used for the shared listener fd in each worker's
-# poll set (never a valid socket fd).
-def _listener_ud() -> int: return -1
+# Per-worker-thread handle to that thread's own App, set once by
+# `_reactor_run` and read by every coroutine it spawns on the same OS
+# thread. Stored as a raw `Pointer[char]`, NOT `ThreadLocal[App]`: a
+# ref-counted class value round-tripped through `ThreadLocal[T].get()`
+# is not reliably retained (confirmed with a real crash — see
+# `_app()`'s comment below), so every read here is an explicit `unsafe`
+# pointer cast instead, deliberately opting out of the compiler's normal
+# ARC bookkeeping for it (correct here since the underlying App is kept
+# alive independently, by `_reactor_run`'s own `app` local, for the whole
+# worker lifetime — every coroutine's use is strictly nested inside that).
+mut _tl_app: ThreadLocal[Pointer[char]] = ThreadLocal.new(0 as Pointer[char])
+
+# Fetch this worker thread's App from `_tl_app`. ALWAYS use the result of
+# this call inline (as a receiver or argument) — never bind it to a named
+# local (`mut app = _app()`). Binding it to a name makes the compiler treat
+# it as a fresh owned value and insert an auto-drop when that name goes out
+# of scope, which releases a reference that was never actually retained;
+# with `App` alive for the worker's entire lifetime (not a throwaway local),
+# that manifests as a random, delayed heap-corruption crash once enough
+# connections have been handled — reproduced directly with
+# `ThreadLocal[App]` (compiles fine after the cast fix in
+# `src/codegen/c.tr`'s `ThreadLocal.get()` dispatch, but is not ARC-safe for
+# a class T) and confirmed fixed only once the value was (a) stored as a raw
+# `Pointer[char]` and (b) cast back to `App` inline, never named, at each
+# use site (tauraro repo: `scratch/test_tls_ptr_realistic.tr`, clean across
+# 2.5M stress-test iterations).
+def _app() -> App:
+    unsafe: return _tl_app.get() as App
+
+# Build a connected, non-blocking, coroutine-aware TcpStream from a raw fd
+# accepted by this worker's listener.
+def _make_async_stream(fd: int) -> TcpStream:
+    mut s = TcpStream()
+    s.fd          = fd
+    s.connected   = true
+    s.async_mode  = true
+    s.host        = ""
+    s.port        = 0
+    # `TcpListener.accept_nb()` already put the OS-level socket in
+    # non-blocking mode as a side effect of accepting it, but that call's
+    # own TcpStream wrapper is discarded (only its raw fd crosses into this
+    # coroutine) - explicitly re-assert it here via the real method (not
+    # just `s.nonblocking = true`, which only sets the bookkeeping field
+    # and does NOT call the underlying ioctlsocket/fcntl) so this is correct
+    # by construction regardless of what accept_nb() did.
+    s.set_nonblocking()
+    return s
+
+# Per-connection coroutine: read the first request, then run the SAME
+# keep-alive dispatch loop `App.listen()` uses (`App._serve_conn`) — it is
+# already fully async-mode-transparent (every I/O call goes through
+# `stream.recv()`/`.send()`, which redirect to the cooperative
+# `recv_async`/`send_async` when `async_mode` is set), so no separate
+# reactor-specific dispatch path is needed here. Every `_app()` call below
+# is used inline, never bound to a named local — see `_app()`'s own comment
+# for why that matters.
+def _handle_connection(arg: Pointer[char]):
+    mut fd: int = 0
+    unsafe: fd = arg as int
+    mut stream = _make_async_stream(fd)
+    # HttpRequest self-manages its memory (an explicit `free()` — really
+    # `free_owned()`, see its own comment — that HttpConn.close() calls once
+    # `conn` owns it). Binding the read_next() result to a named
+    # `HttpRequest`-typed local would ALSO get an auto-drop call inserted at
+    # this function's end (the compiler destructs any class-typed local that
+    # has a `free()` method, regardless of whether it was handed off to a
+    # longer-lived owner in between) — since `conn.request` IS this same
+    # object, that auto-drop is a second, unconditional call to the same
+    # free(), i.e. a real double-free (confirmed via AddressSanitizer).
+    # Same raw-pointer, never-bind-to-a-typed-name workaround as `_app()`
+    # above sidesteps it: the compiler never auto-drops a `Pointer[char]`.
+    mut req_ptr = _app()._server.read_next(stream) as Pointer[char]
+    if Str.len((req_ptr as HttpRequest).method) == 0:
+        stream.close()
+        return
+    mut conn = HttpConn.init(req_ptr as HttpRequest, stream)
+    App._serve_conn(_app(), conn)
+
+# Accept loop coroutine (one per worker): non-blocking accept, parking on
+# the listener's readiness between connections. (`TcpListener.accept_async()`
+# has a known compiler bug returning a class instance across a coroutine
+# park — this is the documented inline workaround from its own doc comment
+# in std/net/tcp.tr.) Spawns one coroutine per accepted connection.
+def _accept_loop(arg: Pointer[char]):
+    mut lfd: int = 0
+    unsafe: lfd = arg as int
+    mut listener = TcpListener()
+    listener.fd        = lfd
+    listener.listening = true
+    listener.host      = ""
+    listener.port      = 0
+    while listener.is_listening() and not Signal.shutdown_requested():
+        mut s = listener.accept_nb()
+        if s.fd >= 0:
+            unsafe: Coro.spawn(_handle_connection as Pointer[char], s.fd as Pointer[char])
+        else:
+            Coro.await_readable(lfd)
+    print("watax: worker shutting down")
 
 def _reactor_run(w: Shared[ReactorWorker]):
     mut app      = w.app.get()
     mut listener = w.listener.get()
-
-    mut poll = IOPoll.new()
-    poll.add(listener.fd, IOPoll.POLLIN(), _listener_ud())
-
-    mut conns:     Map[int, RConn]    = Map[int, RConn].init(64)
-    mut httpconns: Map[int, HttpConn] = Map[int, HttpConn].init(64)
-
-    while listener.is_listening() and not Signal.shutdown_requested():
-        mut evs = poll.wait(1000)
-        mut i = 0
-        while i < evs.len:
-            mut ev = evs.get(i)
-            if ev.userdata == _listener_ud():
-                while true:
-                    mut client = listener.accept_nb()
-                    if client.fd < 0: break
-                    client.set_nonblocking()
-                    mut rc = RConn.init(client)
-                    conns.insert(client.fd, rc)
-                    poll.add(client.fd, IOPoll.POLLIN(), client.fd)
-            else:
-                mut fd = ev.userdata
-                if conns.contains(fd):
-                    mut status = conns.get(fd).poll_read()
-                    if status == -1:
-                        poll.remove(fd)
-                        conns.get(fd).stream.close()
-                        conns.get(fd).dispose()
-                        conns.remove(fd)
-                        if httpconns.contains(fd):
-                            httpconns.get(fd).dispose()
-                            httpconns.remove(fd)
-                    elif status == 1:
-                        mut req = conns.get(fd).take_request()
-                        if httpconns.contains(fd):
-                            mut prev_req = httpconns.get(fd).request
-                            httpconns.get(fd).reset_for(req)
-                            prev_req.free_owned()
-                        else:
-                            mut conn = HttpConn.init(req, conns.get(fd).stream)
-                            httpconns.insert(fd, conn)
-                        App._dispatch(app, httpconns.get(fd))
-                        mut closed = httpconns.get(fd)._closed
-                        if closed or not httpconns.get(fd).request.keep_alive():
-                            poll.remove(fd)
-                            if not closed: httpconns.get(fd).close()
-                            httpconns.get(fd).dispose()
-                            conns.get(fd).dispose()
-                            conns.remove(fd)
-                            httpconns.remove(fd)
-            # poll.wait() heap-allocates each IOEvent individually (Vec.free()
-            # below only frees the backing pointer array, not the elements).
-            unsafe: _tr_c_free(ev as Pointer[char])
-            i = i + 1
-        evs.free()
-
-    if Signal.shutdown_requested():
-        print("watax: worker shutting down")
-    poll.destroy()
+    # `app` stays alive for this whole function (until `Coro.run()` returns
+    # at worker shutdown), so every coroutine spawned below - which all run
+    # to completion strictly before this function does - can safely borrow
+    # it via `_tl_app`/`_app()` for their own, shorter-lived duration.
+    unsafe: _tl_app.set(app as Pointer[char])
+    unsafe: Coro.spawn(_accept_loop as Pointer[char], listener.fd as Pointer[char])
+    Coro.run()
 
 extend App:
     # Single-threaded reactor: handles many keep-alive connections on one
-    # thread via non-blocking I/O + IOPoll instead of one thread per
-    # connection.
+    # thread via a per-connection coroutine (see the module doc comment
+    # above for the full model).
     pub def listen_reactor(self, host: str, port: int):
         App.listen_reactor_pool(self, host, port, 1)
 
-    # `workers` reactor threads share one listening socket. Each worker has
-    # its own IOPoll and connection table; new connections are distributed
-    # across workers by the OS (accept_nb from multiple threads on the same
-    # listening socket is safe - each call either gets a connection or
-    # WOULD_BLOCK).
+    # `workers` reactor threads share one listening socket, each running its
+    # own coroutine scheduler over its own connections (new connections are
+    # distributed across workers by the OS - accept_nb from multiple threads
+    # on the same listening socket is safe: each call either gets a
+    # connection or WOULD_BLOCK).
     #
-    # Ctrl+C (SIGINT) or SIGTERM trips a shared flag that each worker checks
-    # at every `poll.wait()` timeout (<=1s), so the process exits promptly
-    # without cutting off an in-flight request.
+    # Ctrl+C (SIGINT) or SIGTERM trips a shared flag each worker's accept
+    # loop checks between accepts, so the process exits promptly without
+    # cutting off connections already being served.
     pub def listen_reactor_pool(self, host: str, port: int, workers: int):
         self._server = HttpServer.init(host, port)
         App._configure_server(self)

@@ -32,12 +32,24 @@ and a flat memory footprint.
   heavy traffic.
 
 > **Why only these modes.** watax serves concurrently **only** via the reactor
-> (`listen_reactor` / `listen_reactor_pool`): each worker runs its own reactor over
-> its own connection table, so no mutable server state is shared between threads —
-> data-race-free and `--strict`-clean by construction. The earlier thread-per-
-> connection / worker-pool modes (`listen_threaded`, `listen_pooled`, `listen_async`)
-> were **removed**: they shared the accept-loop's server state across threads and
-> raced under load. Use `listen` for single-threaded, a reactor for concurrency.
+> (`listen_reactor` / `listen_reactor_pool`): each worker runs its own coroutine
+> scheduler over its own connections, so no mutable server state is shared between
+> OS threads — data-race-free and `--strict`-clean by construction. The earlier
+> thread-per-connection / worker-pool modes (`listen_threaded`, `listen_pooled`, an
+> earlier `listen_async`) were **removed**: they shared the accept-loop's server
+> state across threads and raced under load. Use `listen` for single-threaded, a
+> reactor for concurrency.
+>
+> **Handlers can be real `async def` now.** Each connection the reactor accepts
+> runs on its own coroutine, sharing the worker OS thread that also does that
+> connection's I/O (the same model Tokio/axum use for their per-core workers — no
+> separate handler thread pool, no cross-thread hop). A route handler declared
+> `async def` can `await` another async call (an outbound request, `Coro.sleep_ms`,
+> anything built on the coroutine runtime) without stalling that worker's other
+> connections; a plain synchronous handler still runs exactly as before. For work
+> that's genuinely CPU-heavy or blocks with no async equivalent, offload it onto
+> `AsyncPool` and poll it cooperatively (`while not task.done(): Coro.yield_now()`)
+> rather than `task.join()`, which would block the whole worker.
 
 
 ## `listen` / `listen_reactor` (single core)
