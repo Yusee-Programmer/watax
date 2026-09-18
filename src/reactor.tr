@@ -158,27 +158,57 @@ def _accept_loop(arg: Pointer[char]):
         if s.fd >= 0:
             unsafe: Coro.spawn(_handle_connection as Pointer[char], s.fd as Pointer[char])
         else:
-            # NOT `Coro.await_readable(lfd)`: that parks this coroutine on
-            # the reactor until the listening socket itself reports
-            # readiness, with no other wakeup source. The scheduler only
-            # re-examines a parked coroutine's own code (including the
+            # `Coro.await_readable(lfd)` parks this coroutine on the reactor
+            # until the listening socket itself reports readiness, with no
+            # other built-in wakeup source: the scheduler only re-examines a
+            # parked coroutine's own code (including the
             # `Signal.shutdown_requested()` check above) when ITS registered
-            # fd gets an event — `_tr_install_shutdown_handler`'s SIGINT/
-            # SIGTERM handler only flips a flag, there's no self-pipe/eventfd
-            # to interrupt an in-flight epoll_wait/kevent. So once the last
-            # connection closes and no new one arrives, this coroutine would
-            # never resume to notice a shutdown signal, and the process hangs
-            # forever — confirmed for real: watax's own CI benchmark job hung
-            # 4+ hours after `kill $SERVER_PID` (SIGTERM) because the accept
-            # loop was idle when the signal arrived. A bounded sleep instead
-            # of an indefinite readiness wait re-checks the flag at worst
-            # every 50ms — negligible added latency to notice a brand-new
-            # connection (and irrelevant to steady-state throughput: this
-            # loop only governs accept(), not the event-driven, fully async
-            # per-connection I/O in `_handle_connection`) — in exchange for a
-            # shutdown that is actually bounded instead of unbounded.
-            Coro.sleep_ms(50)
+            # fd gets an event, and `_tr_install_shutdown_handler`'s SIGINT/
+            # SIGTERM handler only flips a flag (no self-pipe/eventfd to
+            # interrupt an in-flight epoll_wait/kevent). An EARLIER version of
+            # this fix replaced this wait with a bounded `Coro.sleep_ms(50)`
+            # poll to guarantee the flag gets re-checked - that broke the
+            # zero-latency accept path badly (confirmed via CI: throughput
+            # dropped ~45% across every endpoint, since wrk opens a fresh
+            # burst of connections per endpoint and each burst could now
+            # stall up to 50ms waiting for the next poll). Kept the fast,
+            # purely event-driven wait here; shutdown responsiveness is
+            # instead handled out-of-band by `_shutdown_watchdog` below,
+            # which forces a real wakeup via a loopback connect once shutdown
+            # is actually requested - zero cost while running normally.
+            Coro.await_readable(lfd)
     print("watax: worker shutting down")
+
+# Runs on its OWN dedicated OS thread (NOT a coroutine - a plain blocking
+# `Thread.sleep` here is fine, since this thread does nothing else). Every
+# worker's accept loop is parked in `Coro.await_readable(lfd)` with no
+# wakeup source but a real event on the shared listening socket (see
+# `_accept_loop`'s comment) - once `Signal.shutdown_requested()` flips, open
+# one real loopback connection per worker to force that: multiple reactor
+# workers share ONE listening socket, and each worker's own epoll/kqueue
+# instance independently observes readiness on it, so a small burst of real
+# connections reliably wakes every worker's accept loop (only one accepts
+# each dummy connection; the rest see WOULD_BLOCK, loop back to `while`, and
+# exit on the now-true flag - harmless either way).
+#
+# Only `port`/`workers` (both `int`) cross the `Thread.spawn` boundary, not
+# `host`: passing a plain `str` (or a class wrapping one, even Mutex[str])
+# through `Thread.spawn` hits real codegen bugs in the currently-released
+# compiler (TrStr is a 2-word struct, and several "box T into one word" call
+# sites assume a scalar). Always dialing "127.0.0.1" sidesteps that
+# entirely - correct for a listener bound to "127.0.0.1" or "0.0.0.0" (the
+# loopback interface is reachable either way, which covers every example and
+# the benchmark harness in this repo); a listener bound to one specific
+# non-loopback IP would need the real host, which isn't worth the compiler
+# fix/release just for this watchdog.
+def _shutdown_watchdog(port: int, workers: int):
+    while not Signal.shutdown_requested():
+        Thread.sleep(200)
+    mut i = 0
+    while i < workers:
+        mut s = TcpStream.connect("127.0.0.1", port)
+        s.close()
+        i = i + 1
 
 def _reactor_run(w: Shared[ReactorWorker]):
     mut app      = w.app.get()
@@ -216,6 +246,8 @@ extend App:
         self._server._listener.set_nonblocking()
         Signal.install_shutdown_handler()
         print("watax listening (reactor, " + workers.to_str() + " workers) on http://" + host + ":" + port.to_str())
+        mut watchdog = Thread.spawn(_shutdown_watchdog, port, workers)
+        watchdog.detach()
         mut i = 1
         while i < workers:
             shared rw = ReactorWorker.init(self, self._server._listener)
