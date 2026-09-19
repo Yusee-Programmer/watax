@@ -201,9 +201,18 @@ def _accept_loop(arg: Pointer[char]):
 # the benchmark harness in this repo); a listener bound to one specific
 # non-loopback IP would need the real host, which isn't worth the compiler
 # fix/release just for this watchdog.
+#
+# Poll interval is 2s, not something tighter like 200ms: this thread runs
+# for the server's entire lifetime, and even a cheap, mostly-sleeping extra
+# OS thread adds one more scheduling participant competing with the reactor
+# workers for the same cores - measured as a real, consistent 4-16% throughput
+# drop across every benchmark endpoint at 200ms (worse on cheap endpoints,
+# consistent with a small fixed per-wakeup cost) versus the pre-watchdog
+# baseline. 2s still bounds shutdown latency to something trivial for a
+# process exit, while waking 10x less often.
 def _shutdown_watchdog(port: int, workers: int):
     while not Signal.shutdown_requested():
-        Thread.sleep(200)
+        Thread.sleep(2000)
     mut i = 0
     while i < workers:
         mut s = TcpStream.connect("127.0.0.1", port)
