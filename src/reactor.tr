@@ -255,8 +255,12 @@ extend App:
         self._server._listener.set_nonblocking()
         Signal.install_shutdown_handler()
         print("watax listening (reactor, " + workers.to_str() + " workers) on http://" + host + ":" + port.to_str())
-        mut watchdog = Thread.spawn(_shutdown_watchdog, port, workers)
-        watchdog.detach()
+        # TEMP DIAGNOSTIC: watchdog spawn disabled for one CI comparison run to
+        # isolate whether the extra OS thread's mere existence (vs its poll
+        # interval, already ruled out) causes the measured throughput gap.
+        # Re-enable before merging - this reintroduces the SIGTERM-hang bug.
+        # mut watchdog = Thread.spawn(_shutdown_watchdog, port, workers)
+        # watchdog.detach()
         mut i = 1
         while i < workers:
             shared rw = ReactorWorker.init(self, self._server._listener)
